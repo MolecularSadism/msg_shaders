@@ -1,0 +1,24 @@
+[package]
+name = "msg_shaders"
+version = "0.2.0"
+edition = "2024"
+license = "BSD-3-Clause"
+description = "MSG studio shader effects for Bevy: black holes, color quantization, and pixelation"
+keywords = ["bevy", "shader", "blackhole", "quantization", "pixelation"]
+
+[features]
+default = ["render_2d"]
+render_2d = []
+render_3d = []
+
+[dependencies]
+bevy = { workspace = true, default-features = false, features = [
+    "bevy_asset",
+    "bevy_render",
+    "bevy_pbr",
+    "bevy_sprite",
+    "bevy_sprite_render",
+] }
+
+[lints]
+workspace = true
