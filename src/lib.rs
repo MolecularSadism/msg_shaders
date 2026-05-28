@@ -29,7 +29,8 @@ pub mod prelude {
     pub use super::{
         BlackHole, BlackHoleColors, BlackHoleGeometry, BlackHolePlugin, BlackHoleQuantization,
         ColorQuantizationPlugin, ColorQuantizeMaterial, ColorQuantizeUniforms, DitherPattern,
-        HoleQuantization, LensingHole, LensingHoleCamera, LensingHolePlugin, MAX_PALETTE_COLORS,
+        HoleQuantization, LensingHole, LensingHoleCamera, LensingHolePlugin, lens_capture_extent,
+        MAX_PALETTE_COLORS,
         PixelateConfig, PixelateMaterial, PixelationPlugin, QuantizationConfig,
         QuantizePixelateMaterial,
     };
@@ -410,20 +411,23 @@ pub struct LensingHoleCamera;
 /// viewport corner even when the hole sits off-center.
 const LENS_QUAD_COVER_MARGIN: f32 = 1.1;
 
-/// Gravitational lensing hole component for the level-ending cinematic.
+/// Gravitational lensing hole that distorts the live scene around a world point.
 ///
-/// Renders a Schwarzschild-style lens that distorts a sampled background
-/// (typically the pixel-perfect canvas) plus a photon-ring glow and a solid
-/// black event horizon disc. The `size` field (0..1) scales the whole effect
-/// and is animated by the CPU each frame during Growing/Collapsing.
+/// Renders a Schwarzschild-style lens that distorts a sampled background (the
+/// scene-capture canvas) plus a photon-ring glow and a solid black event horizon
+/// disc. The lens works in world space: the visible halo radius (`size`) and the
+/// world position it distorts around are in world units, and the shader samples
+/// the captured scene by world position. This makes the effect track the
+/// camera's translation, zoom, AND rotation implicitly — the capture canvas is
+/// world-axis-aligned and never rotates.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component)]
 pub struct LensingHole {
-    /// Schwarzschild radius in aspect-corrected screen units. Controls the inner black disc.
+    /// Event-horizon radius as a fraction of the visible halo (`size`).
     pub shadow_radius: f32,
-    /// Deflection strength. Higher = more visible UV warping at the horizon edge.
+    /// Deflection strength. Higher = more visible warping at the horizon edge.
     pub lensing_strength: f32,
-    /// Current normalized visual size (0 = invisible, 1 = full quad). Animated by CPU.
+    /// Visible halo radius, in world units (0 = invisible). Animated by the CPU.
     pub size: f32,
     /// Gaussian width of the photon ring glow.
     pub photon_ring_width: f32,
@@ -434,33 +438,19 @@ pub struct LensingHole {
     /// Event horizon color (linear RGBA).
     pub black_color: [f32; 4],
     /// Background texture sampled by the lens. In game use, set this to the
-    /// pixel-perfect canvas image handle so the hole distorts the actual world.
+    /// scene-capture image handle so the hole distorts the actual world.
     pub background: Option<Handle<Image>>,
     /// World-grid square size, in world units. When `> 0`, the disc, ring,
     /// sampled scene, and dither snap to this world-aligned grid so the lens
     /// renders as discrete world-size pixels (`1.0` = one world unit). `0.0`
     /// disables snapping.
     pub world_pixel: f32,
-    /// Quad-to-viewport UV scale, per axis (the lens quad's world size divided
-    /// by the visible viewport's world size). The lens samples its background
-    /// using the mesh UV, so this is what keeps the hole centered on the camera
-    /// and the distortion aligned with the captured scene independent of window
-    /// resolution or camera viewport offset. Set this each frame from the
-    /// camera projection; defaults to `Vec2::ONE` (quad == viewport).
-    pub uv_scale: Vec2,
-    /// Lens center in viewport UV space. `(0.5, 0.5)` (the default) centers the
-    /// hole on screen; shifting it moves the event horizon, photon ring, and
-    /// sampled distortion together. Content the lens deflects off the captured
-    /// viewport stays transparent, so only on-screen pixels are distorted.
-    pub hole_center: Vec2,
-    /// World-pixel cells spanned per unit of viewport UV, per axis (signed).
-    /// Computed each frame from the camera projection; drives the world-grid
-    /// snap. See [`sync_lensing_hole_to_camera`].
-    pub cells_per_uv: Vec2,
-    /// Fractional offset (in cells) of the world grid at viewport UV `(0, 0)`,
-    /// keeping the snap anchored to the world origin without losing precision.
-    /// Computed each frame.
-    pub cell_phase: Vec2,
+    /// World-space center of the square scene-capture canvas (the camera's world
+    /// position). Computed each frame by [`sync_lensing_hole_to_camera`].
+    pub canvas_center: Vec2,
+    /// World-space side lengths of the square scene-capture canvas (the viewport
+    /// diagonal). Computed each frame; see [`lens_capture_extent`].
+    pub canvas_extent: Vec2,
 }
 
 impl Default for LensingHole {
@@ -475,12 +465,20 @@ impl Default for LensingHole {
             black_color: [0.0, 0.0, 0.0, 1.0],
             background: None,
             world_pixel: 1.0,
-            uv_scale: Vec2::ONE,
-            hole_center: Vec2::splat(0.5),
-            cells_per_uv: Vec2::ZERO,
-            cell_phase: Vec2::ZERO,
+            canvas_center: Vec2::ZERO,
+            canvas_extent: Vec2::ONE,
         }
     }
+}
+
+/// World-space side length of the square scene-capture canvas for a viewport of
+/// the given world size. The canvas is axis-aligned and must cover the viewport
+/// at every camera rotation, so it spans the viewport diagonal on both axes.
+///
+/// The scene-capture camera must be sized to the same square (centered on the
+/// camera, no rotation) so the canvas the lens samples matches what was rendered.
+pub fn lens_capture_extent(viewport_world_size: Vec2) -> Vec2 {
+    Vec2::splat(viewport_world_size.length())
 }
 
 #[cfg(feature = "render_2d")]
@@ -512,10 +510,10 @@ fn spawn_lensing_hole_meshes(
             photon_ring_intensity: hole.photon_ring_intensity,
             world_pixel: hole.world_pixel,
             _pad1: 0.0,
-            uv_scale: hole.uv_scale,
-            hole_center: hole.hole_center,
-            cells_per_uv: hole.cells_per_uv,
-            cell_phase: hole.cell_phase,
+            canvas_center: hole.canvas_center,
+            canvas_extent: hole.canvas_extent,
+            hole_center: transform.translation.truncate(),
+            _pad2: Vec2::ZERO,
             photon_ring_color: Vec4::from_array(hole.photon_ring_color),
             black_color: Vec4::from_array(hole.black_color),
         };
@@ -544,75 +542,43 @@ fn spawn_lensing_hole_meshes(
 #[cfg(not(feature = "render_2d"))]
 fn spawn_lensing_hole_meshes() {}
 
-/// Projects each lensing hole's world position into viewport UV and sizes its
-/// quad to cover the camera view.
+/// Mirrors the scene-capture canvas geometry onto each lensing hole and sizes
+/// its quad to cover the hole's halo.
 ///
-/// The hole entity's `Transform` is the lens's world position (in world units,
-/// which differ from screen pixels by the camera zoom). This reads the
-/// [`LensingHoleCamera`]'s orthographic projection to convert that position into
-/// `hole_center` (viewport UV, y-flipped because world +y is up while the
-/// sampled texture's V points down) and sets `uv_scale` plus the quad scale so
-/// the square quad still covers every viewport corner when the hole is
-/// off-center. Callers only need to move the hole entity.
+/// The lens is a world-space effect: the shader recovers each fragment's world
+/// position from the mesh and samples the capture canvas by world position, so
+/// camera translation, zoom, and rotation are all handled implicitly. This
+/// reads the [`LensingHoleCamera`]'s orthographic projection only to derive the
+/// canvas center (the camera position) and the square canvas extent (the
+/// viewport diagonal, see [`lens_capture_extent`]) — exactly matching how the
+/// scene-capture camera is sized — and to scale the lens quad so it covers the
+/// halo. The quad is a world-axis-aligned square centered on the hole; the
+/// camera's own rotation rotates it on screen. Callers only move the hole entity.
 #[cfg(feature = "render_2d")]
 fn sync_lensing_hole_to_camera(
     q_camera: Query<
         (&Projection, &GlobalTransform),
         (With<LensingHoleCamera>, Without<LensingHole>),
     >,
-    mut q_holes: Query<(&mut LensingHole, &mut Transform, &GlobalTransform)>,
+    mut q_holes: Query<(&mut LensingHole, &mut Transform)>,
 ) {
     let Ok((Projection::Orthographic(ortho), camera_gt)) = q_camera.single() else {
         return;
     };
 
-    let view = ortho.area.size();
-    let inv_view = Vec2::new(
-        1.0 / view.x.max(f32::EPSILON),
-        1.0 / view.y.max(f32::EPSILON),
-    );
-    let camera_pos = camera_gt.translation().truncate();
+    let canvas_center = camera_gt.translation().truncate();
+    let canvas_extent = lens_capture_extent(ortho.area.size());
 
-    // Viewport-UV → world mapping: `world = origin + uv * step`, per axis. y is
-    // negated because viewport V points down while world +y is up. `origin` is
-    // the world position at UV (0, 0). Used to anchor the world-pixel snap grid.
-    let step = Vec2::new(view.x, -view.y);
-    let origin = Vec2::new(
-        camera_pos.x + ortho.area.min.x,
-        camera_pos.y + ortho.area.max.y,
-    );
+    for (mut hole, mut transform) in &mut q_holes {
+        hole.canvas_center = canvas_center;
+        hole.canvas_extent = canvas_extent;
 
-    for (mut hole, mut transform, hole_gt) in &mut q_holes {
-        let offset = hole_gt.translation().truncate() - camera_pos;
-
-        hole.hole_center = Vec2::new(
-            (offset.x - ortho.area.min.x) * inv_view.x,
-            (ortho.area.max.y - offset.y) * inv_view.y,
-        );
-
-        // Reach from the hole to the farthest viewport corner per axis; a square
-        // quad of twice that side (plus margin) covers the whole view.
-        let reach = view * 0.5 + offset.abs();
-        let cover_size = 2.0 * reach.length() * LENS_QUAD_COVER_MARGIN;
-        transform.scale = Vec3::splat(cover_size);
-        hole.uv_scale = Vec2::new(cover_size * inv_view.x, cover_size * inv_view.y);
-
-        // World-pixel snap parameters. `cells_per_uv` is how many world-pixel
-        // cells one unit of viewport UV spans; `cell_phase` is the grid's
-        // fractional offset at UV origin (kept fractional so the shader never
-        // sees large world coordinates and loses precision). With `world_pixel`
-        // in world units, this snaps the whole lens to a world-aligned grid.
-        let wp = hole.world_pixel;
-        if wp > 0.0 {
-            hole.cells_per_uv = step / wp;
-            hole.cell_phase = Vec2::new(
-                (origin.x / wp).rem_euclid(1.0),
-                (origin.y / wp).rem_euclid(1.0),
-            );
-        } else {
-            hole.cells_per_uv = Vec2::ZERO;
-            hole.cell_phase = Vec2::ZERO;
-        }
+        // World-axis-aligned square quad covering the hole's halo (radius =
+        // `size`). The quad never rotates with the camera — it is a world object,
+        // and the camera's projection rotates it on screen.
+        let cover = (2.0 * hole.size * LENS_QUAD_COVER_MARGIN).max(1e-3);
+        transform.rotation = Quat::IDENTITY;
+        transform.scale = Vec3::splat(cover);
     }
 }
 
@@ -623,19 +589,18 @@ fn sync_lensing_hole_to_camera() {}
 fn update_lensing_hole_time(
     time: Res<Time>,
     mut materials: ResMut<Assets<LensingHoleMaterial>>,
-    query: Query<(&LensingHole, &MeshMaterial2d<LensingHoleMaterial>)>,
+    query: Query<(&LensingHole, &Transform, &MeshMaterial2d<LensingHoleMaterial>)>,
 ) {
     let elapsed = time.elapsed_secs();
 
-    for (hole, material_handle) in &query {
+    for (hole, transform, material_handle) in &query {
         if let Some(material) = materials.get_mut(&material_handle.0) {
             material.uniforms.time = elapsed;
             material.uniforms.size = hole.size;
-            material.uniforms.uv_scale = hole.uv_scale;
-            material.uniforms.hole_center = hole.hole_center;
             material.uniforms.world_pixel = hole.world_pixel;
-            material.uniforms.cells_per_uv = hole.cells_per_uv;
-            material.uniforms.cell_phase = hole.cell_phase;
+            material.uniforms.canvas_center = hole.canvas_center;
+            material.uniforms.canvas_extent = hole.canvas_extent;
+            material.uniforms.hole_center = transform.translation.truncate();
         }
     }
 }

@@ -133,12 +133,22 @@ impl Material2d for BlackHoleMaterial {
 
 /// Uniforms for the lensing hole shader.
 ///
+/// The lens works entirely in world space: each fragment recovers its world
+/// position from the mesh, deflects it around the hole, and samples the
+/// scene-capture canvas (a world-axis-aligned, non-rotating texture centered on
+/// the camera). Camera rotation and zoom are handled implicitly by the world →
+/// canvas-UV mapping, so no per-axis viewport bookkeeping is needed.
+///
 /// Rows are 16-byte aligned for GPU compatibility.
 #[derive(Clone, Copy, ShaderType)]
 pub struct LensingHoleUniforms {
     // Row 1: Core geometry
+    /// Event-horizon radius as a fraction of the visible halo (`size`). The
+    /// black disc covers `r < shadow_radius` in halo-normalized space.
     pub shadow_radius: f32,
     pub lensing_strength: f32,
+    /// Visible halo radius, in world units. The lens fades to transparent at
+    /// this distance from `hole_center`.
     pub size: f32,
     pub time: f32,
 
@@ -151,25 +161,19 @@ pub struct LensingHoleUniforms {
     pub world_pixel: f32,
     pub _pad1: f32,
 
-    // Row 3: Quad-to-viewport UV scale, per axis (quad world size / viewport
-    // world size). Rescales the mesh UV so the hole stays centered on the
-    // camera and the sampled scene lines up with the captured viewport,
-    // independent of window resolution or camera viewport offset.
-    pub uv_scale: Vec2,
-    /// Lens center in viewport UV space. `(0.5, 0.5)` is the screen center;
-    /// shifting it moves the whole lens (event horizon, ring, and sampled
-    /// distortion) on screen. Samples that deflect off the captured viewport
-    /// stay transparent, so off-screen content is simply not lensed.
-    pub hole_center: Vec2,
+    // Row 3: Scene-capture canvas geometry, in world units.
+    /// World-space center of the square scene-capture canvas (the camera's world
+    /// position). Used to map a world position into the capture texture's UV.
+    pub canvas_center: Vec2,
+    /// World-space side lengths of the square scene-capture canvas. The canvas
+    /// spans the viewport diagonal so the rotated viewport always samples inside
+    /// it. See `lens_capture_extent`.
+    pub canvas_extent: Vec2,
 
-    // Row 4: World-grid snap parameters (see `sync_lensing_hole_to_camera`).
-    /// World-pixel cells spanned per unit of viewport UV, per axis (signed; y
-    /// is negative because viewport V points down while world +y is up).
-    pub cells_per_uv: Vec2,
-    /// Fractional offset of the world grid at viewport UV `(0, 0)`, in cells.
-    /// Keeps the snap grid anchored to the world origin without feeding large
-    /// world coordinates into the shader (which would lose precision).
-    pub cell_phase: Vec2,
+    // Row 4: Hole geometry, in world units.
+    /// World position the lens distorts around (the hole entity's translation).
+    pub hole_center: Vec2,
+    pub _pad2: Vec2,
 
     // Row 5-6: Colors
     pub photon_ring_color: Vec4,
@@ -187,10 +191,10 @@ impl Default for LensingHoleUniforms {
             photon_ring_intensity: 1.2,
             world_pixel: 1.0,
             _pad1: 0.0,
-            uv_scale: Vec2::ONE,
-            hole_center: Vec2::splat(0.5),
-            cells_per_uv: Vec2::ZERO,
-            cell_phase: Vec2::ZERO,
+            canvas_center: Vec2::ZERO,
+            canvas_extent: Vec2::ONE,
+            hole_center: Vec2::ZERO,
+            _pad2: Vec2::ZERO,
             photon_ring_color: Vec4::new(0.6, 0.8, 1.0, 1.0),
             black_color: Vec4::new(0.0, 0.0, 0.0, 1.0),
         }
