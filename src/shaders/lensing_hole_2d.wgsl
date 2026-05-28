@@ -140,16 +140,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // ------------------------------------------------------------------
     // Smooth Schwarzschild-style deflection: magnitude ~ rs * rs / (r - rs).
     // The extra `rs` factor keeps the deflection proportional to the event-
-    // horizon radius. `deflect` is in the same halo-normalized units as `r`, so
-    // it is the radial distance (toward the hole) the sampled point is pulled.
+    // horizon radius. The 1/dr falloff (with a `max` clamp at the rim) stays
+    // well-behaved as r approaches the event horizon, unlike 1/dr² which spikes
+    // to infinity and pushes the sample far off the canvas.
     let dr = max(r - rs, rs * 0.1);
-    let raw_deflect = material.lensing_strength * rs * rs / dr;
-
-    // Cap the pull at the fragment's own radius so the sampled point can reach
-    // the center but never pass through it. Crossing the center would sample the
-    // opposite side, mirroring the lensed scene; the cap keeps every sample on
-    // the fragment's own side of the hole.
-    let deflect = min(raw_deflect, r);
+    let deflect = material.lensing_strength * rs * rs / dr;
 
     // Direction from center; deflection is scaled back to world units by `size`.
     let dir = centered / max(length(centered), 1e-5);
