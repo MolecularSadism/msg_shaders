@@ -137,34 +137,41 @@ impl Material2d for BlackHoleMaterial {
 #[derive(Clone, Copy, ShaderType)]
 pub struct LensingHoleUniforms {
     // Row 1: Core geometry
-    /// Event horizon radius as a fraction of the quad's half-extent.
-    pub shadow_ratio: f32,
+    pub shadow_radius: f32,
     pub lensing_strength: f32,
-    /// Quad half-extent in world units. Converts the shader's `[-1, 1]`
-    /// fraction coords into a true world offset for pixel-perfect sampling.
-    pub world_radius: f32,
+    pub size: f32,
     pub time: f32,
 
     // Row 2: Photon ring
     pub photon_ring_width: f32,
     pub photon_ring_intensity: f32,
-    /// Pixelation grid: number of cells across the screen UV `[0, 1]` range.
-    /// `0.0` disables pixelation. Snaps the sample UV before lensing.
-    pub pixel_grid: f32,
+    /// World-grid square size, in world units. When `> 0`, the disc, ring,
+    /// sampled scene, and dither all snap to this world-aligned grid so the lens
+    /// renders as discrete world-size pixels. `0.0` disables snapping.
+    pub world_pixel: f32,
     pub _pad1: f32,
 
-    // Row 3: World-delta → viewport-UV scale, per axis (the per-axis inverse
-    // viewport world size, y negated because world +y is up while the
-    // texture's V points down). Maps a world-space offset from the hole center
-    // into the capture's viewport UV.
-    pub world_to_uv: Vec2,
+    // Row 3: Quad-to-viewport UV scale, per axis (quad world size / viewport
+    // world size). Rescales the mesh UV so the hole stays centered on the
+    // camera and the sampled scene lines up with the captured viewport,
+    // independent of window resolution or camera viewport offset.
+    pub uv_scale: Vec2,
     /// Lens center in viewport UV space. `(0.5, 0.5)` is the screen center;
     /// shifting it moves the whole lens (event horizon, ring, and sampled
     /// distortion) on screen. Samples that deflect off the captured viewport
     /// stay transparent, so off-screen content is simply not lensed.
     pub hole_center: Vec2,
 
-    // Row 4-5: Colors
+    // Row 4: World-grid snap parameters (see `sync_lensing_hole_to_camera`).
+    /// World-pixel cells spanned per unit of viewport UV, per axis (signed; y
+    /// is negative because viewport V points down while world +y is up).
+    pub cells_per_uv: Vec2,
+    /// Fractional offset of the world grid at viewport UV `(0, 0)`, in cells.
+    /// Keeps the snap grid anchored to the world origin without feeding large
+    /// world coordinates into the shader (which would lose precision).
+    pub cell_phase: Vec2,
+
+    // Row 5-6: Colors
     pub photon_ring_color: Vec4,
     pub black_color: Vec4,
 }
@@ -172,16 +179,18 @@ pub struct LensingHoleUniforms {
 impl Default for LensingHoleUniforms {
     fn default() -> Self {
         Self {
-            shadow_ratio: 0.5,
+            shadow_radius: 0.12,
             lensing_strength: 0.05,
-            world_radius: 0.0,
+            size: 1.0,
             time: 0.0,
             photon_ring_width: 0.02,
             photon_ring_intensity: 1.2,
-            pixel_grid: 0.0,
+            world_pixel: 1.0,
             _pad1: 0.0,
-            world_to_uv: Vec2::ZERO,
+            uv_scale: Vec2::ONE,
             hole_center: Vec2::splat(0.5),
+            cells_per_uv: Vec2::ZERO,
+            cell_phase: Vec2::ZERO,
             photon_ring_color: Vec4::new(0.6, 0.8, 1.0, 1.0),
             black_color: Vec4::new(0.0, 0.0, 0.0, 1.0),
         }

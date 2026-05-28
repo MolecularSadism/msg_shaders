@@ -4,8 +4,7 @@
 //! Provides an importable shader module ([`msg_shaders::pixelate_functions`](crate))
 //! plus two standalone materials:
 //! - [`PixelateMaterial`] — pixelation only.
-//! - [`QuantizePixelateMaterial`] — pixelation combined with color quantization
-//!   in a single pass.
+//! - [`QuantizePixelateMaterial`] — pixelation combined with color quantization in a single pass.
 //!
 //! # Usage
 //!

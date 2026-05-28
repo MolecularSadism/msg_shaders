@@ -146,7 +146,6 @@ impl ColorQuantizeMaterial {
             quantization: config.to_uniforms(),
         }
     }
-
 }
 
 impl Material2d for ColorQuantizeMaterial {
