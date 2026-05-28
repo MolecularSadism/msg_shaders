@@ -1,16 +1,17 @@
 // ============================================================================
 // LENSING HOLE 2D SHADER - Gravitational Lensing Screen Effect
 // ============================================================================
-// Renders a Schwarzschild-style gravitational lens centered on `hole_center`
-// (in viewport UV space; defaults to the screen center).
-// Samples a background texture (the pixel-perfect canvas) with lensed
-// screen-space UVs so the actual game world appears distorted around the hole.
+// Renders a Schwarzschild-style gravitational lens. The quad is a square sized
+// in *world units* and centered on the hole's world position; the captured
+// scene (the pixel-perfect canvas) is sampled by mapping each fragment's world
+// position back into the capture's viewport UV.
 //
-// Math is single-pass and cheap:
-//   - Lensing displacement: dir * (strength / (r - rs)) — single divide, no loop.
-//   - Photon ring: mul-chain Gaussian (no exp/pow).
-//   - Sampling clamped so off-screen lensed UVs return black instead of edge
-//     repeating, which keeps the math closed and avoids artifacts.
+// Working in world units (rather than normalized viewport UV) means:
+//   - No aspect correction: the quad is square in world space, so the disc is
+//     round automatically.
+//   - Pixel-perfect sampling: an undeflected fragment maps to the canvas texel
+//     at its own world position, so the lens lines up 1:1 with the game world.
+//   - Cheap math: single divide for the deflection, mul-chain Gaussian ring.
 // ============================================================================
 
 #import bevy_sprite::mesh2d_vertex_output::VertexOutput
@@ -18,9 +19,9 @@
 #import msg_shaders::pixelate_functions as px
 
 struct LensingHoleMaterial {
-    shadow_radius: f32,
+    shadow_ratio: f32,
     lensing_strength: f32,
-    size: f32,
+    world_radius: f32,
     time: f32,
 
     photon_ring_width: f32,
@@ -28,7 +29,7 @@ struct LensingHoleMaterial {
     pixel_grid: f32,
     _pad1: f32,
 
-    uv_scale: vec2<f32>,
+    world_to_uv: vec2<f32>,
     hole_center: vec2<f32>,
 
     photon_ring_color: vec4<f32>,
@@ -72,32 +73,13 @@ fn maybe_quantize(color: vec4<f32>, screen_pos: vec2<f32>) -> vec4<f32> {
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let screen_pos = in.position.xy;
 
-    // Map the quad's own UV onto the captured viewport. The quad is centered on
-    // the camera and `uv_scale` (= quad size / viewport size, per axis) rescales
-    // its [0,1] UV so 0.5 lands at the viewport center and the edges line up
-    // with the captured scene. Keying off the mesh UV instead of the framebuffer
-    // position keeps the hole centered on the camera regardless of window size,
-    // camera viewport offset, or compositing overlays.
-    let uv_scale = max(material.uv_scale, vec2<f32>(1e-5, 1e-5));
-    let viewport_uv = vec2<f32>(0.5) + (in.uv - vec2<f32>(0.5)) * uv_scale;
-    // Optional pixelation: snap the UV to a grid before lensing so the whole
-    // lens (distortion, ring, and sampled scene) reads as discrete blocks. A
-    // grid of 0 passes the UV through unchanged.
-    let screen_uv = px::pixelate_uv(viewport_uv, vec2<f32>(material.pixel_grid, material.pixel_grid));
+    // Centered, isotropic quad coordinates in [-1, 1]. The quad is square in
+    // world units, so this needs no aspect correction — the disc stays round.
+    let frac = (in.uv - vec2<f32>(0.5)) * 2.0;
+    let r = length(frac);
 
-    // Aspect-correct centered coords so the disc stays round. `uv_scale.y /
-    // uv_scale.x` equals the viewport's width/height ratio. `hole_center` is the
-    // lens center in viewport UV space (0.5,0.5 = screen center); shifting it
-    // moves the whole effect on screen while keeping the disc round.
-    let aspect = uv_scale.y / uv_scale.x;
-    let centered = vec2<f32>((screen_uv.x - material.hole_center.x) * aspect, screen_uv.y - material.hole_center.y);
-
-    // `size` (0..1) scales the whole effect: when 0 the hole is invisible.
-    let size = max(material.size, 0.0001);
-    let scaled = centered / size;
-    let r = length(scaled);
-
-    let rs = material.shadow_radius;
+    // Event horizon as a fraction of the quad's half-extent.
+    let rs = material.shadow_ratio;
 
     // ------------------------------------------------------------------
     // EVENT HORIZON: solid black inside rs.
@@ -117,27 +99,31 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let ring_intensity = ring_t4 * material.photon_ring_intensity;
 
     // ------------------------------------------------------------------
-    // GRAVITATIONAL LENSING: deflect screen-space sample toward center.
+    // GRAVITATIONAL LENSING: deflect the sample toward the center.
     // ------------------------------------------------------------------
-    // Smooth Schwarzschild-style deflection: magnitude ~ rs / (r - rs).
-    // The 1/dr falloff (with a `max` clamp at the rim) is well-behaved as
-    // r approaches the event horizon, unlike 1/dr² which spikes to infinity
-    // and pushes the sample uv far off-screen.
+    // Schwarzschild-style deflection in fraction units: magnitude ~ rs²/(r-rs).
+    // The 1/dr falloff (clamped at the rim) stays well-behaved near the horizon,
+    // unlike 1/dr² which spikes and pushes the sample far off-screen.
     let dr = max(r - rs, rs * 0.1);
-    let deflect = material.lensing_strength * rs / dr;
+    let deflect = material.lensing_strength * rs * rs / dr;
+    let dir = frac / max(length(frac), 1e-5);
+    let lensed_frac = frac - dir * deflect;
 
-    // Direction from center, applied to the *unscaled* centered coords so
-    // the displacement magnitude in screen UV matches `size`.
-    let dir = centered / max(length(centered), 1e-5);
-    let lensed_centered = centered - dir * deflect * size;
-
-    // Map back to screen UV [0,1].
-    let sample_uv = vec2<f32>(lensed_centered.x / aspect, lensed_centered.y) + material.hole_center;
+    // Map the lensed fraction back to a true world offset (`world_radius` is the
+    // quad's half-extent in world units), then to the capture's viewport UV.
+    // `world_to_uv` is the per-axis inverse viewport size (y negated because
+    // world +y is up while the texture's V points down). Because both the quad
+    // and the capture share the camera's view, an undeflected fragment maps to
+    // the canvas texel at its own world position — pixel-perfect alignment.
+    let lensed_world = lensed_frac * material.world_radius;
+    var sample_uv = material.hole_center + lensed_world * material.world_to_uv;
+    // Optional pixelation: snap the sample UV to a grid. A grid of 0 is a no-op.
+    sample_uv = px::pixelate_uv(sample_uv, vec2<f32>(material.pixel_grid, material.pixel_grid));
 
     // Track whether the deflected sample lands inside the captured viewport.
     // Where it falls off-screen the lens has nothing to show — those fragments
-    // should be fully transparent so the un-warped scene shows through, rather
-    // than stamping a black ring around the hole.
+    // stay transparent so the un-warped scene shows through, rather than
+    // stamping a black ring around the hole.
     let in_bounds = step(0.0, sample_uv.x) * step(sample_uv.x, 1.0)
                   * step(0.0, sample_uv.y) * step(sample_uv.y, 1.0);
     let clamped_uv = clamp(sample_uv, vec2<f32>(0.0), vec2<f32>(1.0));
@@ -147,14 +133,14 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let bg = textureSample(background_tex, background_sampler, clamped_uv).rgb * in_bounds;
 
     // Edge fade so the hole blends out at its outer rim instead of stamping a
-    // hard circle. `r` is in scaled centered space (post-`size` divide).
+    // hard circle. `r` is the fraction of the quad half-extent.
     let edge_fade = clamp((1.0 - r) * 4.0, 0.0, 1.0);
 
     let col = bg + material.photon_ring_color.rgb * ring_intensity;
     // Outer-disc alpha: opaque where the lens samples the scene, transparent
-    // where it deflects off-screen, with a soft edge near the outer rim.
-    // The photon ring contributes its own alpha so the ring stays visible
-    // even where the deflected sample lands off the captured viewport.
+    // where it deflects off-screen, with a soft edge near the outer rim. The
+    // photon ring contributes its own alpha so it stays visible even where the
+    // deflected sample lands off the captured viewport.
     let scene_alpha = in_bounds * edge_fade;
     let ring_alpha = clamp(ring_intensity, 0.0, 1.0) * edge_fade;
     let out_alpha = max(scene_alpha, ring_alpha);

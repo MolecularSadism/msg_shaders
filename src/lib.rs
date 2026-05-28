@@ -29,7 +29,8 @@ pub mod prelude {
     pub use super::{
         BlackHole, BlackHoleColors, BlackHoleGeometry, BlackHolePlugin, BlackHoleQuantization,
         ColorQuantizationPlugin, ColorQuantizeMaterial, ColorQuantizeUniforms, DitherPattern,
-        HoleQuantization, LensingHole, LensingHolePlugin, MAX_PALETTE_COLORS, PixelateConfig,
+        HoleQuantization, LensingHole, LensingHoleCamera, LensingHolePlugin, MAX_PALETTE_COLORS,
+        PixelateConfig,
         PixelateMaterial, PixelationPlugin, QuantizationConfig, QuantizePixelateMaterial,
     };
 }
@@ -382,12 +383,32 @@ impl Plugin for LensingHolePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(material::MaterialsPlugin);
         app.register_type::<LensingHole>();
+        app.register_type::<LensingHoleCamera>();
         app.add_systems(
             Update,
-            (spawn_lensing_hole_meshes, update_lensing_hole_time),
+            (
+                spawn_lensing_hole_meshes,
+                sync_lensing_hole_to_camera,
+                update_lensing_hole_time,
+            )
+                .chain(),
         );
     }
 }
+
+/// Marker for the orthographic camera the lensing hole projects against.
+///
+/// Add this to the 2D camera that renders the lens (the one whose view the
+/// player sees). The plugin reads its projection and transform to convert each
+/// `LensingHole` entity's world position into the shader's viewport-space
+/// `hole_center`, so callers only need to move the hole entity.
+#[derive(Component, Debug, Clone, Copy, Reflect, Default)]
+#[reflect(Component)]
+pub struct LensingHoleCamera;
+
+/// Margin multiplier on the quad coverage so the square quad still reaches every
+/// viewport corner even when the hole sits off-center.
+const LENS_QUAD_COVER_MARGIN: f32 = 1.1;
 
 /// Gravitational lensing hole component for the level-ending cinematic.
 ///
@@ -398,13 +419,16 @@ impl Plugin for LensingHolePlugin {
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component)]
 pub struct LensingHole {
-    /// Schwarzschild radius in aspect-corrected screen units. Controls the inner black disc.
-    pub shadow_radius: f32,
-    /// Deflection strength. Higher = more visible UV warping at the horizon edge.
+    /// Deflection strength (dimensionless). Higher = more visible warping at
+    /// the horizon edge.
     pub lensing_strength: f32,
-    /// Current normalized visual size (0 = invisible, 1 = full quad). Animated by CPU.
+    /// Current normalized visual size (0 = invisible, 1 = event horizon covers
+    /// the viewport). Animated by the CPU.
     pub size: f32,
-    /// Gaussian width of the photon ring glow.
+    /// Lens footprint as a multiple of the event-horizon radius. The quad spans
+    /// `event_horizon * outer_ratio` world units; lensing falls off to the rim.
+    pub outer_ratio: f32,
+    /// Gaussian width of the photon ring glow, as a fraction of the footprint.
     pub photon_ring_width: f32,
     /// Peak brightness of the photon ring.
     pub photon_ring_intensity: f32,
@@ -418,34 +442,45 @@ pub struct LensingHole {
     /// Pixelation grid: number of cells across the screen. `0.0` disables
     /// pixelation; higher values produce chunkier blocks.
     pub pixel_grid: f32,
-    /// Quad-to-viewport UV scale, per axis (the lens quad's world size divided
-    /// by the visible viewport's world size). The lens samples its background
-    /// using the mesh UV, so this is what keeps the hole centered on the camera
-    /// and the distortion aligned with the captured scene independent of window
-    /// resolution or camera viewport offset. Set this each frame from the
-    /// camera projection; defaults to `Vec2::ONE` (quad == viewport).
-    pub uv_scale: Vec2,
-    /// Lens center in viewport UV space. `(0.5, 0.5)` (the default) centers the
-    /// hole on screen; shifting it moves the event horizon, photon ring, and
-    /// sampled distortion together. Content the lens deflects off the captured
-    /// viewport stays transparent, so only on-screen pixels are distorted.
+    /// Quad half-extent in world units. Computed each frame from the camera by
+    /// [`sync_lensing_hole_to_camera`]; converts the shader's fraction coords
+    /// into a true world offset for pixel-perfect sampling.
+    pub world_radius: f32,
+    /// Event horizon radius as a fraction of the quad's half-extent. Computed
+    /// each frame; stays constant for a given `outer_ratio`.
+    pub shadow_ratio: f32,
+    /// World-delta → viewport-UV scale, per axis (per-axis inverse viewport
+    /// world size, y negated). Computed each frame from the camera projection.
+    pub world_to_uv: Vec2,
+    /// Lens center in viewport UV space. `(0.5, 0.5)` is the screen center.
+    /// Computed each frame from the hole's world position relative to the
+    /// [`LensingHoleCamera`].
     pub hole_center: Vec2,
+    /// Fixed event-horizon radius in world units. When `Some`, the hole keeps a
+    /// constant world size (scaled by the animated `size`) wherever it sits on
+    /// screen — the right behavior for an in-world object like a projectile.
+    /// When `None` (the default), the hole sizes itself to cover the viewport at
+    /// `size == 1`, growing as it moves off-center — the cinematic behavior.
+    pub event_radius: Option<f32>,
 }
 
 impl Default for LensingHole {
     fn default() -> Self {
         Self {
-            shadow_radius: 0.12,
             lensing_strength: 0.05,
             size: 0.0,
+            outer_ratio: 2.0,
             photon_ring_width: 0.02,
             photon_ring_intensity: 1.2,
             photon_ring_color: [0.6, 0.8, 1.0, 1.0],
             black_color: [0.0, 0.0, 0.0, 1.0],
             background: None,
             pixel_grid: 0.0,
-            uv_scale: Vec2::ONE,
+            world_radius: 0.0,
+            shadow_ratio: 0.5,
+            world_to_uv: Vec2::ZERO,
             hole_center: Vec2::splat(0.5),
+            event_radius: None,
         }
     }
 }
@@ -471,15 +506,15 @@ fn spawn_lensing_hole_meshes(
     let mesh_handle = hole_quad_mesh(&mut commands, &mut meshes, quad_mesh.as_deref());
     for (entity, hole, transform, quantization) in &query {
         let uniforms = LensingHoleUniforms {
-            shadow_radius: hole.shadow_radius,
+            shadow_ratio: hole.shadow_ratio,
             lensing_strength: hole.lensing_strength,
-            size: hole.size,
+            world_radius: hole.world_radius,
             time: 0.0,
             photon_ring_width: hole.photon_ring_width,
             photon_ring_intensity: hole.photon_ring_intensity,
             pixel_grid: hole.pixel_grid,
             _pad1: 0.0,
-            uv_scale: hole.uv_scale,
+            world_to_uv: hole.world_to_uv,
             hole_center: hole.hole_center,
             photon_ring_color: Vec4::from_array(hole.photon_ring_color),
             black_color: Vec4::from_array(hole.black_color),
@@ -509,6 +544,73 @@ fn spawn_lensing_hole_meshes(
 #[cfg(not(feature = "render_2d"))]
 fn spawn_lensing_hole_meshes() {}
 
+/// Projects each lensing hole's world position into viewport UV and sizes its
+/// quad — in world units — to the lens footprint.
+///
+/// The hole entity's `Transform` is the lens's world position (in world units,
+/// which differ from screen pixels by the camera zoom). This reads the
+/// [`LensingHoleCamera`]'s orthographic projection to compute:
+///   - `hole_center`: the hole's position in viewport UV (y-flipped because
+///     world +y is up while the sampled texture's V points down).
+///   - `world_to_uv`: the per-axis inverse viewport world size (y negated),
+///     mapping a world-space offset into capture UV for pixel-perfect sampling.
+///   - the event-horizon world radius that covers the farthest viewport corner
+///     at `size == 1`, scaled by the animated `size`. The quad is sized to the
+///     lens footprint (`event_horizon * outer_ratio`) rather than the whole
+///     viewport, so the capture is only sampled where the lens is visible.
+///
+/// Callers only need to move the hole entity and animate `size`.
+#[cfg(feature = "render_2d")]
+fn sync_lensing_hole_to_camera(
+    q_camera: Query<
+        (&Projection, &GlobalTransform),
+        (With<LensingHoleCamera>, Without<LensingHole>),
+    >,
+    mut q_holes: Query<(&mut LensingHole, &mut Transform, &GlobalTransform)>,
+) {
+    let Ok((Projection::Orthographic(ortho), camera_gt)) = q_camera.single() else {
+        return;
+    };
+
+    let view = ortho.area.size();
+    let inv_view = Vec2::new(1.0 / view.x.max(f32::EPSILON), 1.0 / view.y.max(f32::EPSILON));
+    let camera_pos = camera_gt.translation().truncate();
+
+    for (mut hole, mut transform, hole_gt) in &mut q_holes {
+        let offset = hole_gt.translation().truncate() - camera_pos;
+
+        hole.hole_center = Vec2::new(
+            (offset.x - ortho.area.min.x) * inv_view.x,
+            (ortho.area.max.y - offset.y) * inv_view.y,
+        );
+        hole.world_to_uv = Vec2::new(inv_view.x, -inv_view.y);
+
+        // Event-horizon world radius for this frame. A fixed `event_radius`
+        // keeps the hole a constant world size (projectiles); otherwise it
+        // reaches the farthest viewport corner at full size so the black disc
+        // covers the screen when `size == 1` (the cinematic).
+        let shadow_world = match hole.event_radius {
+            Some(radius) => radius.max(0.0) * hole.size,
+            None => {
+                let reach = view * 0.5 + offset.abs();
+                reach.length() * hole.size
+            }
+        };
+
+        // The quad spans the lens footprint (event horizon plus its lensing
+        // falloff), with a small margin so the square still reaches the corners.
+        let outer_ratio = hole.outer_ratio.max(f32::EPSILON);
+        let quad_world = 2.0 * shadow_world * outer_ratio * LENS_QUAD_COVER_MARGIN;
+        transform.scale = Vec3::splat(quad_world.max(0.0));
+
+        hole.world_radius = quad_world * 0.5;
+        hole.shadow_ratio = 1.0 / (outer_ratio * LENS_QUAD_COVER_MARGIN);
+    }
+}
+
+#[cfg(not(feature = "render_2d"))]
+fn sync_lensing_hole_to_camera() {}
+
 #[cfg(feature = "render_2d")]
 fn update_lensing_hole_time(
     time: Res<Time>,
@@ -520,8 +622,9 @@ fn update_lensing_hole_time(
     for (hole, material_handle) in &query {
         if let Some(material) = materials.get_mut(&material_handle.0) {
             material.uniforms.time = elapsed;
-            material.uniforms.size = hole.size;
-            material.uniforms.uv_scale = hole.uv_scale;
+            material.uniforms.shadow_ratio = hole.shadow_ratio;
+            material.uniforms.world_radius = hole.world_radius;
+            material.uniforms.world_to_uv = hole.world_to_uv;
             material.uniforms.hole_center = hole.hole_center;
         }
     }
