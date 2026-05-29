@@ -1,9 +1,12 @@
 // GPU textures for the lensing-field fluid simulation.
 //
-// Allocates the ping-pong velocity pair (Rg16Float) plus pressure and
-// divergence scratch textures (R16Float), all at LENSING_FIELD_RES².
-// The read-side velocity handle is the one LensingMaterial samples each
-// frame; the write side is swapped by the node after each pass.
+// Allocates a pair of Rg16Float velocity textures plus pressure and divergence
+// scratch (R16Float), all at LENSING_FIELD_RES². The pair is not ping-ponged
+// across frames: within each frame the compute passes shuttle data between
+// them in a fixed order (inject → advect → divergence → Jacobi → gradient
+// subtract), and the final solved velocity always lands in `velocity_write`.
+// `LensingMaterial` samples `velocity_write`; inject reads `velocity_read` to
+// recover last frame's post-advect state for its decay term.
 
 use bevy::{
     asset::RenderAssetUsages,
@@ -13,20 +16,15 @@ use bevy::{
 
 use crate::lensing_field::LENSING_FIELD_RES;
 
-/// Ping-pong velocity textures (Rg16Float) plus pressure and divergence
-/// scratch textures (R16Float), all LENSING_FIELD_RES².
-///
-/// Inserted as a resource during plugin startup. The render node swaps
-/// `velocity_ping` and `velocity_pong` each frame so the GPU never reads
-/// and writes the same texture in one pass.
-///
-/// `velocity_read()` returns whichever handle `LensingMaterial` should
-/// sample this frame; `velocity_write()` is the storage target.
+/// Velocity pair (Rg16Float) plus pressure and divergence scratch (R16Float),
+/// all LENSING_FIELD_RES². Inserted as a resource during plugin startup.
 #[derive(Resource, Clone)]
 pub struct LensingFieldTextures {
-    /// Velocity ping buffer (Rg16Float). Active read target on odd frames.
+    /// Intermediate velocity buffer. Inject reads this for decay; advect writes
+    /// here; divergence and gradient-subtract read it.
     pub velocity_ping: Handle<Image>,
-    /// Velocity pong buffer (Rg16Float). Active read target on even frames.
+    /// Final velocity output. Gradient-subtract writes its result here, and
+    /// `LensingMaterial` samples this handle each frame.
     pub velocity_pong: Handle<Image>,
     /// Pressure scratch (R16Float). Ping buffer for Jacobi iteration.
     pub pressure_ping: Handle<Image>,
@@ -34,36 +32,23 @@ pub struct LensingFieldTextures {
     pub pressure_pong: Handle<Image>,
     /// Divergence of the velocity field (R16Float). Written once per frame.
     pub divergence: Handle<Image>,
-    /// Which velocity buffer is currently the read target (`true` = ping).
-    pub read_is_ping: bool,
 }
 
 impl LensingFieldTextures {
-    /// Handle the fragment shader should sample this frame.
+    /// Inject's decay input; advect's output. Holds last frame's post-advect
+    /// state at the start of the next frame's inject pass.
     pub fn velocity_read(&self) -> &Handle<Image> {
-        if self.read_is_ping {
-            &self.velocity_ping
-        } else {
-            &self.velocity_pong
-        }
+        &self.velocity_ping
     }
 
-    /// Handle the compute shader writes into this frame.
+    /// Gradient-subtract's output: the divergence-free velocity field for the
+    /// current frame. `LensingMaterial` samples this handle.
     pub fn velocity_write(&self) -> &Handle<Image> {
-        if self.read_is_ping {
-            &self.velocity_pong
-        } else {
-            &self.velocity_ping
-        }
-    }
-
-    /// Swap read/write roles after all compute passes for this frame finish.
-    pub fn swap(&mut self) {
-        self.read_is_ping = !self.read_is_ping;
+        &self.velocity_pong
     }
 }
 
-/// Allocates and registers all four lensing-field textures into `images`.
+/// Allocates and registers all lensing-field textures into `images`.
 ///
 /// Called once during plugin startup on the main-world `Assets<Image>`.
 pub fn allocate_lensing_textures(images: &mut Assets<Image>) -> LensingFieldTextures {
@@ -109,6 +94,5 @@ pub fn allocate_lensing_textures(images: &mut Assets<Image>) -> LensingFieldText
         pressure_ping: images.add(make_r()),
         pressure_pong: images.add(make_r()),
         divergence: images.add(make_r()),
-        read_is_ping: true,
     }
 }

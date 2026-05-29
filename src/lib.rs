@@ -621,8 +621,13 @@ fn drive_lensing(
         );
     }
 
-    // Resolve the velocity field handle for the material (None on first frame).
-    let velocity_field = field_textures.as_deref().map(|t| t.velocity_read().clone());
+    // The material samples the same texture that the compute pipeline's final
+    // pass (gradient subtract) writes into — that's `velocity_write`. The
+    // render-graph edge guarantees the compute completes before the main pass
+    // samples it, so each frame's lensing displays the freshly solved field.
+    let velocity_field = field_textures
+        .as_deref()
+        .map(|t| t.velocity_write().clone());
 
     // World-axis-aligned square quad covering the whole canvas. The unit quad
     // mesh is scaled to the canvas extent; the camera's rotation rotates it on

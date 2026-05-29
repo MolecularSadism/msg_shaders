@@ -1,8 +1,9 @@
 // Render-graph node for the lensing-field fluid simulation.
 //
 // Dispatches five compute passes each frame (inject → advect → divergence →
-// pressure Jacobi × N → gradient subtract) then swaps the ping-pong velocity
-// buffers so the fragment shader reads the freshly computed field.
+// pressure Jacobi × N → gradient subtract). The final divergence-free velocity
+// lands in `velocity_write` (i.e. `velocity_pong`), which `LensingMaterial`
+// samples in the same-frame main pass thanks to the render-graph edge.
 //
 // The node is a `ViewNode` targeting `LensingHoleCamera` cameras so the
 // dispatch runs exactly once per lens-overlay render target, before the 2D
