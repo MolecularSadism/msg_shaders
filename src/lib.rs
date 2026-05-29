@@ -2,12 +2,18 @@
 // Black hole based on Eric Bruneton's black_hole_shader (BSD-3-Clause)
 // https://github.com/ebruneton/black_hole_shader
 
+#[cfg(feature = "render_2d")]
+mod lensing_field;
 mod material;
 mod pixelate;
 mod quantize;
 mod quantize_material;
 
 use bevy::prelude::*;
+#[cfg(feature = "render_2d")]
+pub use lensing_field::{
+    LENSING_FIELD_RES, LensingFieldPlugin, LensingFieldSettings, LensingFieldTextures,
+};
 pub use material::{
     BlackHoleMaterial, BlackHoleUniforms, LensData, LensingMaterial, LensingUniforms, MAX_LENSES,
 };
@@ -29,10 +35,12 @@ pub mod prelude {
     pub use super::{
         BlackHole, BlackHoleColors, BlackHoleGeometry, BlackHolePlugin, BlackHoleQuantization,
         ColorQuantizationPlugin, ColorQuantizeMaterial, ColorQuantizeUniforms, DitherPattern,
-        HoleQuantization, LensingHole, LensingHoleCamera, LensingHolePlugin, MAX_PALETTE_COLORS,
-        LensingCanvas, LensingMaterial, PixelateConfig, PixelateMaterial,
-        PixelationPlugin, QuantizationConfig, QuantizePixelateMaterial, lens_capture_extent,
+        HoleQuantization, LensingCanvas, LensingHole, LensingHoleCamera, LensingHolePlugin,
+        LensingMaterial, MAX_PALETTE_COLORS, PixelateConfig, PixelateMaterial, PixelationPlugin,
+        QuantizationConfig, QuantizePixelateMaterial, lens_capture_extent,
     };
+    #[cfg(feature = "render_2d")]
+    pub use super::{LENSING_FIELD_RES, LensingFieldPlugin, LensingFieldSettings};
 }
 
 // ============================================================================
@@ -382,6 +390,8 @@ pub struct LensingHolePlugin;
 impl Plugin for LensingHolePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(material::MaterialsPlugin);
+        #[cfg(feature = "render_2d")]
+        app.add_plugins(LensingFieldPlugin);
         app.register_type::<LensingHole>();
         app.register_type::<LensingHoleCamera>();
         app.register_type::<LensingCanvas>();
@@ -490,6 +500,9 @@ pub fn lens_capture_extent(viewport_world_size: Vec2) -> Vec2 {
 /// by influence and capped to [`MAX_LENSES`]. The canvas quad is a world-axis-
 /// aligned square centered on the camera; the camera's own rotation rotates it on
 /// screen, so the quad itself never rotates.
+///
+/// Also populates `LensingFieldExtractSource` each frame so the GPU fluid
+/// simulation receives the current lens array and canvas geometry.
 #[cfg(feature = "render_2d")]
 fn drive_lensing(
     mut commands: Commands,
@@ -509,6 +522,9 @@ fn drive_lensing(
         ),
         With<LensingCanvas>,
     >,
+    field_textures: Option<Res<lensing_field::LensingFieldTextures>>,
+    field_settings: Option<Res<lensing_field::LensingFieldSettings>>,
+    mut field_source: Option<ResMut<lensing_field::extract::LensingFieldExtractSource>>,
 ) {
     let Ok((Projection::Orthographic(ortho), camera_gt)) = q_camera.single() else {
         return;
@@ -582,12 +598,31 @@ fn drive_lensing(
         *slot = *data;
     }
 
+    let survivor_lens_data: Vec<LensData> = survivors.into_iter().map(|(_, d)| d).collect();
+
     let uniforms = LensingUniforms {
         canvas_center,
         canvas_extent,
-        count: survivors.len() as u32,
+        count: survivor_lens_data.len() as u32,
         lenses,
     };
+
+    // Feed the lens array and canvas geometry into the GPU fluid simulation.
+    if let Some(ref mut source) = field_source {
+        lensing_field::extract::update_lensing_field_source(
+            source,
+            field_settings
+                .as_deref()
+                .unwrap_or(&lensing_field::LensingFieldSettings::default()),
+            field_textures.as_deref(),
+            &survivor_lens_data,
+            canvas_center,
+            canvas_extent,
+        );
+    }
+
+    // Resolve the velocity field handle for the material (None on first frame).
+    let velocity_field = field_textures.as_deref().map(|t| t.velocity_read().clone());
 
     // World-axis-aligned square quad covering the whole canvas. The unit quad
     // mesh is scaled to the canvas extent; the camera's rotation rotates it on
@@ -606,6 +641,9 @@ fn drive_lensing(
             if material.background.is_none() {
                 material.background = background;
             }
+            // Update the velocity field handle every frame so the material
+            // always samples the current read-side texture.
+            material.velocity_field = velocity_field;
         }
     } else {
         let mesh_handle = hole_quad_mesh(&mut commands, &mut meshes, quad_mesh.as_deref());
@@ -613,6 +651,7 @@ fn drive_lensing(
             uniforms,
             quantization,
             background,
+            velocity_field,
         });
         commands
             .entity(canvas_entity)
