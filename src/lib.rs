@@ -9,7 +9,8 @@ mod quantize_material;
 
 use bevy::prelude::*;
 pub use material::{
-    BlackHoleMaterial, BlackHoleUniforms, LensingHoleMaterial, LensingHoleUniforms,
+    BlackHoleMaterial, BlackHoleUniforms, LensData, LensingHoleMaterial, LensingHoleUniforms,
+    MAX_LENSES, MultiLensingMaterial, MultiLensingUniforms,
 };
 
 // Color quantization (reusable across materials).
@@ -29,10 +30,9 @@ pub mod prelude {
     pub use super::{
         BlackHole, BlackHoleColors, BlackHoleGeometry, BlackHolePlugin, BlackHoleQuantization,
         ColorQuantizationPlugin, ColorQuantizeMaterial, ColorQuantizeUniforms, DitherPattern,
-        HoleQuantization, LensingHole, LensingHoleCamera, LensingHolePlugin, lens_capture_extent,
-        MAX_PALETTE_COLORS,
-        PixelateConfig, PixelateMaterial, PixelationPlugin, QuantizationConfig,
-        QuantizePixelateMaterial,
+        HoleQuantization, LensingHole, LensingHoleCamera, LensingHolePlugin, MAX_PALETTE_COLORS,
+        MultiLensingCanvas, MultiLensingMaterial, PixelateConfig, PixelateMaterial,
+        PixelationPlugin, QuantizationConfig, QuantizePixelateMaterial, lens_capture_extent,
     };
 }
 
@@ -385,17 +385,21 @@ impl Plugin for LensingHolePlugin {
         app.add_plugins(material::MaterialsPlugin);
         app.register_type::<LensingHole>();
         app.register_type::<LensingHoleCamera>();
-        app.add_systems(
-            Update,
-            (
-                spawn_lensing_hole_meshes,
-                sync_lensing_hole_to_camera,
-                update_lensing_hole_time,
-            )
-                .chain(),
-        );
+        app.register_type::<MultiLensingCanvas>();
+        app.add_systems(Update, drive_multi_lensing);
     }
 }
+
+/// Marker for the persistent canvas-covering quad that renders all lenses in one
+/// combined pass.
+///
+/// The owning app spawns exactly one entity with this marker plus the render
+/// layer the lens overlay draws on, a `Transform`, and `Visibility`. The plugin
+/// fills in the `Mesh2d` + `MeshMaterial2d::<MultiLensingMaterial>` on first run
+/// and drives the material's lens array each frame; see [`drive_multi_lensing`].
+#[derive(Component, Debug, Clone, Copy, Reflect, Default)]
+#[reflect(Component)]
+pub struct MultiLensingCanvas;
 
 /// Marker for the orthographic camera the lensing hole projects against.
 ///
@@ -406,10 +410,6 @@ impl Plugin for LensingHolePlugin {
 #[derive(Component, Debug, Clone, Copy, Reflect, Default)]
 #[reflect(Component)]
 pub struct LensingHoleCamera;
-
-/// Margin multiplier on the quad coverage so the square quad still reaches every
-/// viewport corner even when the hole sits off-center.
-const LENS_QUAD_COVER_MARGIN: f32 = 1.1;
 
 /// Gravitational lensing hole that distorts the live scene around a world point.
 ///
@@ -440,11 +440,6 @@ pub struct LensingHole {
     /// Background texture sampled by the lens. In game use, set this to the
     /// scene-capture image handle so the hole distorts the actual world.
     pub background: Option<Handle<Image>>,
-    /// World-grid square size, in world units. When `> 0`, the disc, ring,
-    /// sampled scene, and dither snap to this world-aligned grid so the lens
-    /// renders as discrete world-size pixels (`1.0` = one world unit). `0.0`
-    /// disables snapping.
-    pub world_pixel: f32,
     /// World-space center of the square scene-capture canvas (the camera's world
     /// position). Computed each frame by [`sync_lensing_hole_to_camera`].
     pub canvas_center: Vec2,
@@ -464,7 +459,6 @@ impl Default for LensingHole {
             photon_ring_color: [0.6, 0.8, 1.0, 1.0],
             black_color: [0.0, 0.0, 0.0, 1.0],
             background: None,
-            world_pixel: 1.0,
             canvas_center: Vec2::ZERO,
             canvas_extent: Vec2::ONE,
         }
@@ -481,129 +475,151 @@ pub fn lens_capture_extent(viewport_world_size: Vec2) -> Vec2 {
     Vec2::splat(viewport_world_size.length())
 }
 
-#[cfg(feature = "render_2d")]
-#[derive(Component)]
-struct LensingHoleMesh;
-
-#[cfg(feature = "render_2d")]
-fn spawn_lensing_hole_meshes(
-    mut commands: Commands,
-    mut materials: ResMut<Assets<LensingHoleMaterial>>,
-    quad_mesh: Option<Res<HoleQuadMesh>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    query: Query<
-        (Entity, &LensingHole, &Transform, Option<&HoleQuantization>),
-        Without<LensingHoleMesh>,
-    >,
-) {
-    if query.is_empty() {
-        return;
-    }
-    let mesh_handle = hole_quad_mesh(&mut commands, &mut meshes, quad_mesh.as_deref());
-    for (entity, hole, transform, quantization) in &query {
-        let uniforms = LensingHoleUniforms {
-            shadow_radius: hole.shadow_radius,
-            lensing_strength: hole.lensing_strength,
-            size: hole.size,
-            time: 0.0,
-            photon_ring_width: hole.photon_ring_width,
-            photon_ring_intensity: hole.photon_ring_intensity,
-            world_pixel: hole.world_pixel,
-            _pad1: 0.0,
-            canvas_center: hole.canvas_center,
-            canvas_extent: hole.canvas_extent,
-            hole_center: transform.translation.truncate(),
-            _pad2: Vec2::ZERO,
-            photon_ring_color: Vec4::from_array(hole.photon_ring_color),
-            black_color: Vec4::from_array(hole.black_color),
-        };
-
-        let quantization_uniforms = quantization.map(|q| q.to_uniforms()).unwrap_or_default();
-
-        let material = materials.add(LensingHoleMaterial {
-            uniforms,
-            quantization: quantization_uniforms,
-            background: hole.background.clone(),
-        });
-
-        commands.entity(entity).insert((
-            LensingHoleMesh,
-            Mesh2d(mesh_handle.clone()),
-            MeshMaterial2d(material),
-            Transform {
-                translation: transform.translation,
-                rotation: transform.rotation,
-                scale: transform.scale,
-            },
-        ));
-    }
-}
-
-#[cfg(not(feature = "render_2d"))]
-fn spawn_lensing_hole_meshes() {}
-
-/// Mirrors the scene-capture canvas geometry onto each lensing hole and sizes
-/// its quad to cover the hole's halo.
+/// Gathers every [`LensingHole`] into the single [`MultiLensingCanvas`] quad's
+/// combined-field material each frame.
 ///
 /// The lens is a world-space effect: the shader recovers each fragment's world
 /// position from the mesh and samples the capture canvas by world position, so
-/// camera translation, zoom, and rotation are all handled implicitly. This
-/// reads the [`LensingHoleCamera`]'s orthographic projection only to derive the
-/// canvas center (the camera position) and the square canvas extent (the
-/// viewport diagonal, see [`lens_capture_extent`]) — exactly matching how the
-/// scene-capture camera is sized — and to scale the lens quad so it covers the
-/// halo. The quad is a world-axis-aligned square centered on the hole; the
-/// camera's own rotation rotates it on screen. Callers only move the hole entity.
+/// camera translation, zoom, and rotation are handled implicitly. This reads the
+/// [`LensingHoleCamera`]'s orthographic projection to derive the canvas center
+/// (the camera position) and the square canvas extent (the viewport diagonal,
+/// see [`lens_capture_extent`]) — matching how the scene-capture camera is sized.
+///
+/// To keep the per-fragment loop cheap with many lenses, the active set is culled
+/// on the CPU: lenses with negligible size are dropped, and those whose halo AABB
+/// does not intersect the canvas square are frustum-culled. Survivors are sorted
+/// by influence and capped to [`MAX_LENSES`]. The canvas quad is a world-axis-
+/// aligned square centered on the camera; the camera's own rotation rotates it on
+/// screen, so the quad itself never rotates.
 #[cfg(feature = "render_2d")]
-fn sync_lensing_hole_to_camera(
+fn drive_multi_lensing(
+    mut commands: Commands,
+    mut materials: ResMut<Assets<MultiLensingMaterial>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    quad_mesh: Option<Res<HoleQuadMesh>>,
     q_camera: Query<
         (&Projection, &GlobalTransform),
-        (With<LensingHoleCamera>, Without<LensingHole>),
+        (With<LensingHoleCamera>, Without<MultiLensingCanvas>),
     >,
-    mut q_holes: Query<(&mut LensingHole, &mut Transform)>,
+    q_holes: Query<(&LensingHole, &GlobalTransform, Option<&HoleQuantization>)>,
+    mut q_canvas: Query<
+        (
+            Entity,
+            &mut Transform,
+            Option<&MeshMaterial2d<MultiLensingMaterial>>,
+        ),
+        With<MultiLensingCanvas>,
+    >,
 ) {
     let Ok((Projection::Orthographic(ortho), camera_gt)) = q_camera.single() else {
+        return;
+    };
+    let Ok((canvas_entity, mut canvas_tf, material_handle)) = q_canvas.single_mut() else {
         return;
     };
 
     let canvas_center = camera_gt.translation().truncate();
     let canvas_extent = lens_capture_extent(ortho.area.size());
 
-    for (mut hole, mut transform) in &mut q_holes {
-        hole.canvas_center = canvas_center;
-        hole.canvas_extent = canvas_extent;
+    // Canvas AABB for frustum culling. A lens contributes only if its halo
+    // (`center ± size`) overlaps this square.
+    let half = canvas_extent * 0.5;
+    let canvas_min = canvas_center - half;
+    let canvas_max = canvas_center + half;
 
-        // World-axis-aligned square quad covering the hole's halo (radius =
-        // `size`). The quad never rotates with the camera — it is a world object,
-        // and the camera's projection rotates it on screen.
-        let cover = (2.0 * hole.size * LENS_QUAD_COVER_MARGIN).max(1e-3);
-        transform.rotation = Quat::IDENTITY;
-        transform.scale = Vec3::splat(cover);
-    }
-}
+    // Survivors carry an influence weight for sorting when capping to MAX_LENSES.
+    let mut survivors: Vec<(f32, LensData)> = Vec::new();
+    let mut background: Option<Handle<Image>> = None;
+    let mut quantization: Option<ColorQuantizeUniforms> = None;
 
-#[cfg(not(feature = "render_2d"))]
-fn sync_lensing_hole_to_camera() {}
-
-#[cfg(feature = "render_2d")]
-fn update_lensing_hole_time(
-    time: Res<Time>,
-    mut materials: ResMut<Assets<LensingHoleMaterial>>,
-    query: Query<(&LensingHole, &Transform, &MeshMaterial2d<LensingHoleMaterial>)>,
-) {
-    let elapsed = time.elapsed_secs();
-
-    for (hole, transform, material_handle) in &query {
-        if let Some(material) = materials.get_mut(&material_handle.0) {
-            material.uniforms.time = elapsed;
-            material.uniforms.size = hole.size;
-            material.uniforms.world_pixel = hole.world_pixel;
-            material.uniforms.canvas_center = hole.canvas_center;
-            material.uniforms.canvas_extent = hole.canvas_extent;
-            material.uniforms.hole_center = transform.translation.truncate();
+    for (hole, gt, quant) in &q_holes {
+        if hole.size <= 1e-3 {
+            continue;
         }
+        let center = gt.translation().truncate();
+        // Halo AABB vs canvas AABB.
+        if center.x + hole.size < canvas_min.x
+            || center.x - hole.size > canvas_max.x
+            || center.y + hole.size < canvas_min.y
+            || center.y - hole.size > canvas_max.y
+        {
+            continue;
+        }
+
+        if background.is_none() {
+            background = hole.background.clone();
+        }
+        if quantization.is_none()
+            && let Some(q) = quant
+        {
+            quantization = Some(q.to_uniforms());
+        }
+
+        // Larger, stronger lenses win a slot first when the cap is exceeded.
+        let influence = hole.size * (hole.lensing_strength.abs() + hole.photon_ring_intensity);
+        survivors.push((
+            influence,
+            LensData {
+                center_size_shadow: Vec4::new(center.x, center.y, hole.size, hole.shadow_radius),
+                strength_ring: Vec4::new(
+                    hole.lensing_strength,
+                    hole.photon_ring_width,
+                    hole.photon_ring_intensity,
+                    0.0,
+                ),
+                photon_ring_color: Vec4::from_array(hole.photon_ring_color),
+                black_color: Vec4::from_array(hole.black_color),
+            },
+        ));
+    }
+
+    if survivors.len() > MAX_LENSES {
+        survivors.sort_by(|a, b| b.0.total_cmp(&a.0));
+        survivors.truncate(MAX_LENSES);
+    }
+
+    let mut lenses = [LensData::default(); MAX_LENSES];
+    for (slot, (_, data)) in lenses.iter_mut().zip(survivors.iter()) {
+        *slot = *data;
+    }
+
+    let uniforms = MultiLensingUniforms {
+        canvas_center,
+        canvas_extent,
+        count: survivors.len() as u32,
+        lenses,
+    };
+
+    // World-axis-aligned square quad covering the whole canvas. The unit quad
+    // mesh is scaled to the canvas extent; the camera's rotation rotates it on
+    // screen, so the quad itself stays unrotated.
+    canvas_tf.translation.x = canvas_center.x;
+    canvas_tf.translation.y = canvas_center.y;
+    canvas_tf.rotation = Quat::IDENTITY;
+    canvas_tf.scale = Vec3::new(canvas_extent.x, canvas_extent.y, 1.0);
+
+    let quantization = quantization.unwrap_or_default();
+
+    if let Some(handle) = material_handle {
+        if let Some(material) = materials.get_mut(&handle.0) {
+            material.uniforms = uniforms;
+            material.quantization = quantization;
+            if material.background.is_none() {
+                material.background = background;
+            }
+        }
+    } else {
+        let mesh_handle = hole_quad_mesh(&mut commands, &mut meshes, quad_mesh.as_deref());
+        let material = materials.add(MultiLensingMaterial {
+            uniforms,
+            quantization,
+            background,
+        });
+        commands
+            .entity(canvas_entity)
+            .insert((Mesh2d(mesh_handle), MeshMaterial2d(material)));
     }
 }
 
 #[cfg(not(feature = "render_2d"))]
-fn update_lensing_hole_time() {}
+fn drive_multi_lensing() {}

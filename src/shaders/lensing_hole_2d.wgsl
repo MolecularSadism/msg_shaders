@@ -29,14 +29,13 @@ struct LensingHoleMaterial {
 
     photon_ring_width: f32,
     photon_ring_intensity: f32,
-    world_pixel: f32,
-    _pad1: f32,
+    _pad0: vec2<f32>,
 
     canvas_center: vec2<f32>,
     canvas_extent: vec2<f32>,
 
     hole_center: vec2<f32>,
-    _pad2: vec2<f32>,
+    _pad1: vec2<f32>,
 
     photon_ring_color: vec4<f32>,
     black_color: vec4<f32>,
@@ -55,17 +54,6 @@ struct QuantizationSettings {
 @group(2) @binding(1) var<uniform> quantization: QuantizationSettings;
 @group(2) @binding(2) var background_tex: texture_2d<f32>;
 @group(2) @binding(3) var background_sampler: sampler;
-
-// Snap a world position to the center of its world-pixel cell so the disc, ring,
-// and sampled scene read as discrete world-size squares. With `world_pixel == 0`
-// snapping is disabled and the position passes through.
-fn snap_world(p: vec2<f32>) -> vec2<f32> {
-    if material.world_pixel <= 0.0 {
-        return p;
-    }
-    let wp = material.world_pixel;
-    return (floor(p / wp) + vec2<f32>(0.5)) * wp;
-}
 
 // Map a world position to the scene-capture canvas UV. The canvas is a square
 // world-axis-aligned region centered on `canvas_center`; V is flipped because
@@ -100,14 +88,12 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // The fragment's true world position, recovered from the mesh. This already
     // accounts for the camera's translation, zoom, and rotation, so all lens
     // math below stays in world space and never re-derives the camera.
-    let world = snap_world(in.world_position.xy);
+    let world = in.world_position.xy;
 
-    // Dither coordinate in world-pixel cells (one Bayer threshold per world
-    // pixel). Biased positive so the integer modulo in the dither lookup never
-    // sees a negative; the bias is a multiple of the 4x4/8x8 pattern sizes so it
-    // doesn't shift the pattern.
-    let wp = max(material.world_pixel, 1.0);
-    let dither_pos = floor(in.world_position.xy / wp) + vec2<f32>(1048576.0);
+    // Dither coordinate in lens-canvas pixels: the lens renders to a world-pixel
+    // canvas, so one fragment is one world pixel and the fragment position yields
+    // one Bayer threshold per world pixel directly.
+    let dither_pos = floor(in.position.xy);
 
     // Position relative to the hole, normalized by the halo radius (`size`):
     // r == shadow_radius at the event horizon, r == 1 at the outer rim. World
@@ -150,7 +136,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let dir = centered / max(length(centered), 1e-5);
     let lensed_world = world - dir * deflect * size;
 
-    let sample_uv = canvas_uv(snap_world(lensed_world));
+    let sample_uv = canvas_uv(lensed_world);
 
     // Track whether the deflected sample lands inside the captured canvas. Where
     // it falls outside, the lens has nothing to show — those fragments stay

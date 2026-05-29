@@ -155,11 +155,7 @@ pub struct LensingHoleUniforms {
     // Row 2: Photon ring
     pub photon_ring_width: f32,
     pub photon_ring_intensity: f32,
-    /// World-grid square size, in world units. When `> 0`, the disc, ring,
-    /// sampled scene, and dither all snap to this world-aligned grid so the lens
-    /// renders as discrete world-size pixels. `0.0` disables snapping.
-    pub world_pixel: f32,
-    pub _pad1: f32,
+    pub _pad0: Vec2,
 
     // Row 3: Scene-capture canvas geometry, in world units.
     /// World-space center of the square scene-capture canvas (the camera's world
@@ -173,7 +169,7 @@ pub struct LensingHoleUniforms {
     // Row 4: Hole geometry, in world units.
     /// World position the lens distorts around (the hole entity's translation).
     pub hole_center: Vec2,
-    pub _pad2: Vec2,
+    pub _pad1: Vec2,
 
     // Row 5-6: Colors
     pub photon_ring_color: Vec4,
@@ -189,12 +185,11 @@ impl Default for LensingHoleUniforms {
             time: 0.0,
             photon_ring_width: 0.02,
             photon_ring_intensity: 1.2,
-            world_pixel: 1.0,
-            _pad1: 0.0,
+            _pad0: Vec2::ZERO,
             canvas_center: Vec2::ZERO,
             canvas_extent: Vec2::ONE,
             hole_center: Vec2::ZERO,
-            _pad2: Vec2::ZERO,
+            _pad1: Vec2::ZERO,
             photon_ring_color: Vec4::new(0.6, 0.8, 1.0, 1.0),
             black_color: Vec4::new(0.0, 0.0, 0.0, 1.0),
         }
@@ -233,6 +228,99 @@ impl Default for LensingHoleMaterial {
 impl Material2d for LensingHoleMaterial {
     fn fragment_shader() -> ShaderRef {
         "embedded://msg_shaders/shaders/lensing_hole_2d.wgsl".into()
+    }
+
+    fn alpha_mode(&self) -> AlphaMode2d {
+        AlphaMode2d::Blend
+    }
+}
+
+/// Maximum number of lenses combined in a single [`MultiLensingMaterial`] pass.
+///
+/// The CPU gather culls (frustum + size threshold) and caps the active set to
+/// this many; the shader loops only over `count <= MAX_LENSES`, so empty slots
+/// cost nothing. At 64 B/lens this is a 4 KB uniform, well under the 64 KB limit.
+/// Kept in sync with the `array<LensData, …>` size in `multi_lensing_2d.wgsl`.
+pub const MAX_LENSES: usize = 64;
+
+/// One lens packed for the combined-field shader. Four 16-byte rows (64 B).
+///
+/// Components are packed into `vec4`s to keep a tight, alignment-friendly layout
+/// for the uniform array; the shader unpacks them by field index.
+#[derive(Clone, Copy, ShaderType)]
+pub struct LensData {
+    /// `xy` = world center, `z` = halo radius (`size`), `w` = `shadow_radius`
+    /// (event-horizon radius as a fraction of the halo).
+    pub center_size_shadow: Vec4,
+    /// `x` = lensing strength, `y` = photon ring width, `z` = photon ring
+    /// intensity, `w` = padding.
+    pub strength_ring: Vec4,
+    pub photon_ring_color: Vec4,
+    pub black_color: Vec4,
+}
+
+impl Default for LensData {
+    fn default() -> Self {
+        Self {
+            center_size_shadow: Vec4::new(0.0, 0.0, 0.0, 0.12),
+            strength_ring: Vec4::ZERO,
+            photon_ring_color: Vec4::ZERO,
+            black_color: Vec4::new(0.0, 0.0, 0.0, 1.0),
+        }
+    }
+}
+
+/// Uniforms for the combined multi-lens shader.
+///
+/// All lenses share one scene-capture canvas, so the canvas geometry is stored
+/// once. Each fragment sums every active lens's Schwarzschild deflection into a
+/// single flow field, then samples the canvas once — so overlapping lenses warp
+/// the space between them mutually rather than stacking independent distortions.
+#[derive(Clone, Copy, ShaderType)]
+pub struct MultiLensingUniforms {
+    /// World-space center of the square scene-capture canvas (camera position).
+    pub canvas_center: Vec2,
+    /// World-space side lengths of the square canvas (viewport diagonal).
+    pub canvas_extent: Vec2,
+    /// Number of populated entries in `lenses`. The shader loops `0..count`.
+    pub count: u32,
+    pub lenses: [LensData; MAX_LENSES],
+}
+
+impl Default for MultiLensingUniforms {
+    fn default() -> Self {
+        Self {
+            canvas_center: Vec2::ZERO,
+            canvas_extent: Vec2::ONE,
+            count: 0,
+            lenses: [LensData::default(); MAX_LENSES],
+        }
+    }
+}
+
+/// Material for the combined gravitational-lensing pass.
+///
+/// A single canvas-covering quad carries this material; its uniforms hold an
+/// array of lenses gathered from all `LensingHole` entities each frame. Reuses
+/// the same `ColorQuantizeUniforms` and background-sampling bindings as
+/// [`LensingHoleMaterial`].
+#[derive(Asset, TypePath, AsBindGroup, Clone, Default)]
+pub struct MultiLensingMaterial {
+    #[uniform(0)]
+    pub uniforms: MultiLensingUniforms,
+    #[uniform(1)]
+    pub quantization: ColorQuantizeUniforms,
+    /// Background to distort (the scene-capture image). Nearest-filtered to
+    /// preserve the canvas's pixel grid.
+    #[texture(2)]
+    #[sampler(3)]
+    pub background: Option<Handle<Image>>,
+}
+
+#[cfg(feature = "render_2d")]
+impl Material2d for MultiLensingMaterial {
+    fn fragment_shader() -> ShaderRef {
+        "embedded://msg_shaders/shaders/multi_lensing_2d.wgsl".into()
     }
 
     fn alpha_mode(&self) -> AlphaMode2d {
@@ -279,6 +367,10 @@ impl Plugin for MaterialsPlugin {
             embedded_asset!(app, "shaders/lensing_hole_2d.wgsl");
             if !app.is_plugin_added::<Material2dPlugin<LensingHoleMaterial>>() {
                 app.add_plugins(Material2dPlugin::<LensingHoleMaterial>::default());
+            }
+            embedded_asset!(app, "shaders/multi_lensing_2d.wgsl");
+            if !app.is_plugin_added::<Material2dPlugin<MultiLensingMaterial>>() {
+                app.add_plugins(Material2dPlugin::<MultiLensingMaterial>::default());
             }
         }
     }
