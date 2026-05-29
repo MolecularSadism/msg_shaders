@@ -162,5 +162,13 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let out_alpha = max(scene_alpha, ring_alpha);
     let output = vec4<f32>(clamp(col, vec3<f32>(0.0), vec3<f32>(1.0)), out_alpha);
 
-    return maybe_quantize(output, dither_pos);
+    // Quantize only the photon sphere — the ring glow region around the horizon.
+    // The lensed background fills the rest of the screen and passes through at
+    // full fidelity, so the expensive palette match runs on a small fraction of
+    // fragments. `ring_mask` fades the quantized result in over the glow.
+    let ring_mask = clamp(ring_strength, 0.0, 1.0);
+    if ring_mask <= 0.0 {
+        return output;
+    }
+    return mix(output, maybe_quantize(output, dither_pos), ring_mask);
 }

@@ -217,8 +217,14 @@ impl Material2d for LensingMaterial {
         "embedded://msg_shaders/shaders/lensing_2d.wgsl".into()
     }
 
+    // The single canvas-covering quad writes every canvas pixel exactly once, so
+    // no in-canvas blending is required. Writing the fragment's straight (un-
+    // premultiplied) color and alpha through keeps the alpha composite for the
+    // canvas sprite's own blend over the world. Blending here instead would
+    // premultiply the stored color, which the sprite then multiplies by alpha a
+    // second time — darkening soft edges into a grey halo.
     fn alpha_mode(&self) -> AlphaMode2d {
-        AlphaMode2d::Blend
+        AlphaMode2d::Opaque
     }
 }
 
