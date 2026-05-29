@@ -9,8 +9,7 @@ mod quantize_material;
 
 use bevy::prelude::*;
 pub use material::{
-    BlackHoleMaterial, BlackHoleUniforms, LensData, LensingHoleMaterial, LensingHoleUniforms,
-    MAX_LENSES, MultiLensingMaterial, MultiLensingUniforms,
+    BlackHoleMaterial, BlackHoleUniforms, LensData, LensingMaterial, LensingUniforms, MAX_LENSES,
 };
 
 // Color quantization (reusable across materials).
@@ -31,7 +30,7 @@ pub mod prelude {
         BlackHole, BlackHoleColors, BlackHoleGeometry, BlackHolePlugin, BlackHoleQuantization,
         ColorQuantizationPlugin, ColorQuantizeMaterial, ColorQuantizeUniforms, DitherPattern,
         HoleQuantization, LensingHole, LensingHoleCamera, LensingHolePlugin, MAX_PALETTE_COLORS,
-        MultiLensingCanvas, MultiLensingMaterial, PixelateConfig, PixelateMaterial,
+        LensingCanvas, LensingMaterial, PixelateConfig, PixelateMaterial,
         PixelationPlugin, QuantizationConfig, QuantizePixelateMaterial, lens_capture_extent,
     };
 }
@@ -385,8 +384,8 @@ impl Plugin for LensingHolePlugin {
         app.add_plugins(material::MaterialsPlugin);
         app.register_type::<LensingHole>();
         app.register_type::<LensingHoleCamera>();
-        app.register_type::<MultiLensingCanvas>();
-        app.add_systems(Update, drive_multi_lensing);
+        app.register_type::<LensingCanvas>();
+        app.add_systems(Update, drive_lensing);
     }
 }
 
@@ -395,11 +394,11 @@ impl Plugin for LensingHolePlugin {
 ///
 /// The owning app spawns exactly one entity with this marker plus the render
 /// layer the lens overlay draws on, a `Transform`, and `Visibility`. The plugin
-/// fills in the `Mesh2d` + `MeshMaterial2d::<MultiLensingMaterial>` on first run
-/// and drives the material's lens array each frame; see [`drive_multi_lensing`].
+/// fills in the `Mesh2d` + `MeshMaterial2d::<LensingMaterial>` on first run
+/// and drives the material's lens array each frame; see [`drive_lensing`].
 #[derive(Component, Debug, Clone, Copy, Reflect, Default)]
 #[reflect(Component)]
-pub struct MultiLensingCanvas;
+pub struct LensingCanvas;
 
 /// Marker for the orthographic camera the lensing hole projects against.
 ///
@@ -475,7 +474,7 @@ pub fn lens_capture_extent(viewport_world_size: Vec2) -> Vec2 {
     Vec2::splat(viewport_world_size.length())
 }
 
-/// Gathers every [`LensingHole`] into the single [`MultiLensingCanvas`] quad's
+/// Gathers every [`LensingHole`] into the single [`LensingCanvas`] quad's
 /// combined-field material each frame.
 ///
 /// The lens is a world-space effect: the shader recovers each fragment's world
@@ -492,23 +491,23 @@ pub fn lens_capture_extent(viewport_world_size: Vec2) -> Vec2 {
 /// aligned square centered on the camera; the camera's own rotation rotates it on
 /// screen, so the quad itself never rotates.
 #[cfg(feature = "render_2d")]
-fn drive_multi_lensing(
+fn drive_lensing(
     mut commands: Commands,
-    mut materials: ResMut<Assets<MultiLensingMaterial>>,
+    mut materials: ResMut<Assets<LensingMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
     quad_mesh: Option<Res<HoleQuadMesh>>,
     q_camera: Query<
         (&Projection, &GlobalTransform),
-        (With<LensingHoleCamera>, Without<MultiLensingCanvas>),
+        (With<LensingHoleCamera>, Without<LensingCanvas>),
     >,
     q_holes: Query<(&LensingHole, &GlobalTransform, Option<&HoleQuantization>)>,
     mut q_canvas: Query<
         (
             Entity,
             &mut Transform,
-            Option<&MeshMaterial2d<MultiLensingMaterial>>,
+            Option<&MeshMaterial2d<LensingMaterial>>,
         ),
-        With<MultiLensingCanvas>,
+        With<LensingCanvas>,
     >,
 ) {
     let Ok((Projection::Orthographic(ortho), camera_gt)) = q_camera.single() else {
@@ -583,7 +582,7 @@ fn drive_multi_lensing(
         *slot = *data;
     }
 
-    let uniforms = MultiLensingUniforms {
+    let uniforms = LensingUniforms {
         canvas_center,
         canvas_extent,
         count: survivors.len() as u32,
@@ -610,7 +609,7 @@ fn drive_multi_lensing(
         }
     } else {
         let mesh_handle = hole_quad_mesh(&mut commands, &mut meshes, quad_mesh.as_deref());
-        let material = materials.add(MultiLensingMaterial {
+        let material = materials.add(LensingMaterial {
             uniforms,
             quantization,
             background,
@@ -622,4 +621,4 @@ fn drive_multi_lensing(
 }
 
 #[cfg(not(feature = "render_2d"))]
-fn drive_multi_lensing() {}
+fn drive_lensing() {}

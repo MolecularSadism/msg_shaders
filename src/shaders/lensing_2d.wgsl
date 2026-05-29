@@ -1,15 +1,15 @@
 // ============================================================================
-// MULTI-LENSING 2D SHADER - Combined Gravitational Lensing Flow Field
+// LENSING 2D SHADER - Combined Gravitational Lensing Flow Field
 // ============================================================================
-// Renders many Schwarzschild-style lenses in a single pass over one canvas-
-// covering quad. Each fragment sums every active lens's deflection into one
-// flow field, then samples the scene-capture canvas ONCE — so overlapping
+// Renders any number of Schwarzschild-style lenses in a single pass over one
+// canvas-covering quad. Each fragment sums every active lens's deflection into
+// one flow field, then samples the scene-capture canvas ONCE — so overlapping
 // lenses mutually warp the space between them instead of stacking independent
 // distortions.
 //
-// Like the single-lens variant, everything is world space: the fragment reads
-// its own world position from the mesh and samples a world-axis-aligned, non-
-// rotating capture texture centered on the camera (`canvas_center`) spanning
+// Everything is world space: the fragment reads its own world position from the
+// mesh and samples a world-axis-aligned, non-rotating capture texture centered
+// on the camera (`canvas_center`) spanning
 // the viewport diagonal (`canvas_extent`). Camera translation/zoom/rotation are
 // handled by the mesh→screen projection, never re-derived here.
 //
@@ -35,7 +35,7 @@ struct LensData {
 // Must match `MAX_LENSES` in material.rs.
 const MAX_LENSES: u32 = 64u;
 
-struct MultiLensing {
+struct Lensing {
     canvas_center: vec2<f32>,
     canvas_extent: vec2<f32>,
     count: u32,
@@ -51,7 +51,7 @@ struct QuantizationSettings {
     transparency_floor: f32,
 };
 
-@group(2) @binding(0) var<uniform> material: MultiLensing;
+@group(2) @binding(0) var<uniform> material: Lensing;
 @group(2) @binding(1) var<uniform> quantization: QuantizationSettings;
 @group(2) @binding(2) var background_tex: texture_2d<f32>;
 @group(2) @binding(3) var background_sampler: sampler;

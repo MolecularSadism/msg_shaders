@@ -131,116 +131,12 @@ impl Material2d for BlackHoleMaterial {
     }
 }
 
-/// Uniforms for the lensing hole shader.
-///
-/// The lens works entirely in world space: each fragment recovers its world
-/// position from the mesh, deflects it around the hole, and samples the
-/// scene-capture canvas (a world-axis-aligned, non-rotating texture centered on
-/// the camera). Camera rotation and zoom are handled implicitly by the world →
-/// canvas-UV mapping, so no per-axis viewport bookkeeping is needed.
-///
-/// Rows are 16-byte aligned for GPU compatibility.
-#[derive(Clone, Copy, ShaderType)]
-pub struct LensingHoleUniforms {
-    // Row 1: Core geometry
-    /// Event-horizon radius as a fraction of the visible halo (`size`). The
-    /// black disc covers `r < shadow_radius` in halo-normalized space.
-    pub shadow_radius: f32,
-    pub lensing_strength: f32,
-    /// Visible halo radius, in world units. The lens fades to transparent at
-    /// this distance from `hole_center`.
-    pub size: f32,
-    pub time: f32,
-
-    // Row 2: Photon ring
-    pub photon_ring_width: f32,
-    pub photon_ring_intensity: f32,
-    pub _pad0: Vec2,
-
-    // Row 3: Scene-capture canvas geometry, in world units.
-    /// World-space center of the square scene-capture canvas (the camera's world
-    /// position). Used to map a world position into the capture texture's UV.
-    pub canvas_center: Vec2,
-    /// World-space side lengths of the square scene-capture canvas. The canvas
-    /// spans the viewport diagonal so the rotated viewport always samples inside
-    /// it. See `lens_capture_extent`.
-    pub canvas_extent: Vec2,
-
-    // Row 4: Hole geometry, in world units.
-    /// World position the lens distorts around (the hole entity's translation).
-    pub hole_center: Vec2,
-    pub _pad1: Vec2,
-
-    // Row 5-6: Colors
-    pub photon_ring_color: Vec4,
-    pub black_color: Vec4,
-}
-
-impl Default for LensingHoleUniforms {
-    fn default() -> Self {
-        Self {
-            shadow_radius: 0.12,
-            lensing_strength: 0.05,
-            size: 1.0,
-            time: 0.0,
-            photon_ring_width: 0.02,
-            photon_ring_intensity: 1.2,
-            _pad0: Vec2::ZERO,
-            canvas_center: Vec2::ZERO,
-            canvas_extent: Vec2::ONE,
-            hole_center: Vec2::ZERO,
-            _pad1: Vec2::ZERO,
-            photon_ring_color: Vec4::new(0.6, 0.8, 1.0, 1.0),
-            black_color: Vec4::new(0.0, 0.0, 0.0, 1.0),
-        }
-    }
-}
-
-/// Material for the gravitational lensing hole effect.
-///
-/// Samples the supplied `background` texture (the pixel-perfect canvas in
-/// game use) with screen-space UVs deflected by a Schwarzschild-style lens.
-/// Reuses the same `ColorQuantizeUniforms` as `BlackHoleMaterial`.
-#[derive(Asset, TypePath, AsBindGroup, Clone)]
-pub struct LensingHoleMaterial {
-    #[uniform(0)]
-    pub uniforms: LensingHoleUniforms,
-    #[uniform(1)]
-    pub quantization: ColorQuantizeUniforms,
-    /// Background to distort. Sampled with nearest filtering to preserve
-    /// the canvas's pixel grid.
-    #[texture(2)]
-    #[sampler(3)]
-    pub background: Option<Handle<Image>>,
-}
-
-impl Default for LensingHoleMaterial {
-    fn default() -> Self {
-        Self {
-            uniforms: LensingHoleUniforms::default(),
-            quantization: ColorQuantizeUniforms::default(),
-            background: None,
-        }
-    }
-}
-
-#[cfg(feature = "render_2d")]
-impl Material2d for LensingHoleMaterial {
-    fn fragment_shader() -> ShaderRef {
-        "embedded://msg_shaders/shaders/lensing_hole_2d.wgsl".into()
-    }
-
-    fn alpha_mode(&self) -> AlphaMode2d {
-        AlphaMode2d::Blend
-    }
-}
-
-/// Maximum number of lenses combined in a single [`MultiLensingMaterial`] pass.
+/// Maximum number of lenses combined in a single [`LensingMaterial`] pass.
 ///
 /// The CPU gather culls (frustum + size threshold) and caps the active set to
 /// this many; the shader loops only over `count <= MAX_LENSES`, so empty slots
 /// cost nothing. At 64 B/lens this is a 4 KB uniform, well under the 64 KB limit.
-/// Kept in sync with the `array<LensData, …>` size in `multi_lensing_2d.wgsl`.
+/// Kept in sync with the `array<LensData, …>` size in `lensing_2d.wgsl`.
 pub const MAX_LENSES: usize = 64;
 
 /// One lens packed for the combined-field shader. Four 16-byte rows (64 B).
@@ -277,7 +173,7 @@ impl Default for LensData {
 /// single flow field, then samples the canvas once — so overlapping lenses warp
 /// the space between them mutually rather than stacking independent distortions.
 #[derive(Clone, Copy, ShaderType)]
-pub struct MultiLensingUniforms {
+pub struct LensingUniforms {
     /// World-space center of the square scene-capture canvas (camera position).
     pub canvas_center: Vec2,
     /// World-space side lengths of the square canvas (viewport diagonal).
@@ -287,7 +183,7 @@ pub struct MultiLensingUniforms {
     pub lenses: [LensData; MAX_LENSES],
 }
 
-impl Default for MultiLensingUniforms {
+impl Default for LensingUniforms {
     fn default() -> Self {
         Self {
             canvas_center: Vec2::ZERO,
@@ -301,13 +197,11 @@ impl Default for MultiLensingUniforms {
 /// Material for the combined gravitational-lensing pass.
 ///
 /// A single canvas-covering quad carries this material; its uniforms hold an
-/// array of lenses gathered from all `LensingHole` entities each frame. Reuses
-/// the same `ColorQuantizeUniforms` and background-sampling bindings as
-/// [`LensingHoleMaterial`].
+/// array of lenses gathered from all `LensingHole` entities each frame.
 #[derive(Asset, TypePath, AsBindGroup, Clone, Default)]
-pub struct MultiLensingMaterial {
+pub struct LensingMaterial {
     #[uniform(0)]
-    pub uniforms: MultiLensingUniforms,
+    pub uniforms: LensingUniforms,
     #[uniform(1)]
     pub quantization: ColorQuantizeUniforms,
     /// Background to distort (the scene-capture image). Nearest-filtered to
@@ -318,9 +212,9 @@ pub struct MultiLensingMaterial {
 }
 
 #[cfg(feature = "render_2d")]
-impl Material2d for MultiLensingMaterial {
+impl Material2d for LensingMaterial {
     fn fragment_shader() -> ShaderRef {
-        "embedded://msg_shaders/shaders/multi_lensing_2d.wgsl".into()
+        "embedded://msg_shaders/shaders/lensing_2d.wgsl".into()
     }
 
     fn alpha_mode(&self) -> AlphaMode2d {
@@ -364,13 +258,9 @@ impl Plugin for MaterialsPlugin {
             if !app.is_plugin_added::<Material2dPlugin<BlackHoleMaterial>>() {
                 app.add_plugins(Material2dPlugin::<BlackHoleMaterial>::default());
             }
-            embedded_asset!(app, "shaders/lensing_hole_2d.wgsl");
-            if !app.is_plugin_added::<Material2dPlugin<LensingHoleMaterial>>() {
-                app.add_plugins(Material2dPlugin::<LensingHoleMaterial>::default());
-            }
-            embedded_asset!(app, "shaders/multi_lensing_2d.wgsl");
-            if !app.is_plugin_added::<Material2dPlugin<MultiLensingMaterial>>() {
-                app.add_plugins(Material2dPlugin::<MultiLensingMaterial>::default());
+            embedded_asset!(app, "shaders/lensing_2d.wgsl");
+            if !app.is_plugin_added::<Material2dPlugin<LensingMaterial>>() {
+                app.add_plugins(Material2dPlugin::<LensingMaterial>::default());
             }
         }
     }
