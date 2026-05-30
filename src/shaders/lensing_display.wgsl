@@ -114,6 +114,10 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 
     var ring_accum = vec3<f32>(0.0);
     var ring_strength = 0.0;
+    // Center + rotation of the lens whose ring is strongest here; the snap
+    // lattice spins in this hole's frame so the ring looks rotated in place.
+    var snap_center = vec2<f32>(0.0);
+    var snap_rotation = 0.0;
     var horizon = false;
     var horizon_color = vec3<f32>(0.0);
 
@@ -140,7 +144,11 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         let ring_t2 = ring_t * ring_t;
         let ring_i = ring_t2 * ring_t2 * lens.strength_ring.z;
         ring_accum += lens.photon_ring_color.rgb * ring_i;
-        ring_strength = max(ring_strength, ring_i);
+        if ring_i > ring_strength {
+            ring_strength = ring_i;
+            snap_center = center;
+            snap_rotation = lens.strength_ring.w;
+        }
     }
 
     // Interior of the event horizon is a solid color: no scene, no snap.
@@ -157,15 +165,27 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         return smooth;
     }
 
-    // Photon ring / shadow edge only: snap the sample to the world-pixel grid
+    // Photon ring / shadow edge only: snap the sample to a world-pixel grid
     // (world units already equal physical pixels / camera zoom) so the ring
-    // reads as chunky pixels, then quantize with one Bayer threshold per world
-    // pixel. The bias keeps the dither index non-negative for negative world
-    // coords; 2^23 is a multiple of both Bayer periods (4 and 8) so it does not
-    // shift the pattern, and stays exactly representable in f32 so the modulo is
-    // exact.
-    let cell = floor(world);
-    let snapped = lensed_scene(cell + vec2<f32>(0.5)) + ring_accum;
+    // reads as chunky pixels, then quantize with one Bayer threshold per cell.
+    // The grid lives in the dominant hole's rotated frame, so the ring looks
+    // spun in place while the deflected scene underneath is unchanged: transform
+    // into that frame, snap to a cell there, and map the cell center back to
+    // world for the sample.
+    let c = cos(snap_rotation);
+    let s = sin(snap_rotation);
+    let rel = world - snap_center;
+    // R(-rot) * rel.
+    let local = vec2<f32>(c * rel.x + s * rel.y, -s * rel.x + c * rel.y);
+    let cell = floor(local);
+    let cell_center = cell + vec2<f32>(0.5);
+    // R(rot) * cell_center + center.
+    let world_cell = snap_center
+        + vec2<f32>(c * cell_center.x - s * cell_center.y, s * cell_center.x + c * cell_center.y);
+    let snapped = lensed_scene(world_cell) + ring_accum;
+    // The bias keeps the dither index non-negative for negative cell coords;
+    // 2^23 is a multiple of both Bayer periods (4 and 8) so it does not shift the
+    // pattern, and stays exactly representable in f32 so the modulo is exact.
     let dither_pos = cell + vec2<f32>(8388608.0);
     let quantized = maybe_quantize(vec4<f32>(snapped, 1.0), dither_pos);
     return mix(smooth, quantized, ring_mask);
