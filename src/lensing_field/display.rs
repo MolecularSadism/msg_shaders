@@ -36,7 +36,7 @@ use bevy::shader::Shader;
 use bevy_post_process_2d::PostProcess2dAppExt;
 
 use crate::lensing_field::extract::ExtractedLensingField;
-use crate::{LensData, LensingHoleCamera, MAX_LENSES};
+use crate::{ColorQuantizeUniforms, LensData, LensingHoleCamera, MAX_LENSES};
 
 const DISPLAY_SHADER: &str = "embedded://msg_shaders/shaders/lensing_display.wgsl";
 
@@ -55,6 +55,9 @@ struct LensingDisplayUniform {
     /// `xy` = canvas world-space center, `zw` = canvas world-space extent. The
     /// field is sampled in this canvas's UV space.
     canvas_center_extent: Vec4,
+    /// Palette quantization applied only to the photon-ring / shadow-edge band.
+    /// `palette_size == 0` disables it.
+    quantization: ColorQuantizeUniforms,
     /// Number of populated entries in `lenses`.
     count: u32,
     lenses: [LensData; MAX_LENSES],
@@ -66,6 +69,7 @@ impl Default for LensingDisplayUniform {
             clip_from_world: Mat4::IDENTITY,
             world_from_clip: Mat4::IDENTITY,
             canvas_center_extent: Vec4::new(0.0, 0.0, 1.0, 1.0),
+            quantization: ColorQuantizeUniforms::default(),
             count: 0,
             lenses: [LensData::default(); MAX_LENSES],
         }
@@ -111,6 +115,7 @@ fn prepare_lensing_display_uniforms(
         clip_from_world,
         world_from_clip: clip_from_world.inverse(),
         canvas_center_extent: extracted.canvas_center_extent,
+        quantization: extracted.ring_quantization,
         count,
         lenses,
     });

@@ -7,12 +7,17 @@
 // screen space, and reads the lit scene there. The photon ring and event-horizon
 // disc are drawn per-lens on top, in world space.
 //
+// The photon ring / shadow edge is the only region that pays for world-pixel
+// snapping and palette quantization: a fragment outside the ring band returns
+// the smoothly-sampled lit scene and never runs the snap or the palette match.
+//
 // Unlike the canvas-strategy material, nothing is sampled from an offscreen
 // scene capture: the source is the live, lit view target, so the lens warps the
 // final image at full screen resolution.
 // ============================================================================
 
 #import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
+#import msg_shaders::color_quantize_functions as cq
 
 // One lens, packed into four vec4 rows. Must match `LensData` in material.rs.
 struct LensData {
@@ -26,11 +31,22 @@ struct LensData {
 
 const MAX_LENSES: u32 = 64u;
 
+// Must match `ColorQuantizeUniforms` field order in quantize_material.rs.
+struct QuantizationSettings {
+    palette: array<vec4<f32>, 64>,
+    palette_oklab: array<vec4<f32>, 64>,
+    palette_size: u32,
+    alpha_cutoff: f32,
+    dither_pattern: u32,
+    transparency_floor: f32,
+};
+
 struct LensingDisplay {
     clip_from_world: mat4x4<f32>,
     world_from_clip: mat4x4<f32>,
     // xy = canvas world-space center, zw = canvas world-space extent.
     canvas_center_extent: vec4<f32>,
+    quantization: QuantizationSettings,
     count: u32,
     lenses: array<LensData, 64>,
 };
@@ -65,11 +81,39 @@ fn uv_from_world(world: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
 }
 
+// Lit scene at a world position: deflect by the field, project back to screen,
+// sample the view target (clamped to the visible region).
+fn lensed_scene(world: vec2<f32>) -> vec3<f32> {
+    let deflect = textureSample(velocity_field_tex, velocity_field_sampler, canvas_uv(world)).rg;
+    let sample_uv = clamp(uv_from_world(world - deflect), vec2<f32>(0.0), vec2<f32>(1.0));
+    return textureSample(scene_tex, scene_sampler, sample_uv).rgb;
+}
+
+// Palette-quantize a color; pass-through when no palette is configured.
+fn maybe_quantize(color: vec4<f32>, dither_pos: vec2<f32>) -> vec4<f32> {
+    if u.quantization.palette_size == 0u {
+        return color;
+    }
+    var palette = u.quantization.palette;
+    var palette_oklab = u.quantization.palette_oklab;
+    return cq::quantize_color(
+        color,
+        dither_pos,
+        &palette,
+        &palette_oklab,
+        u.quantization.palette_size,
+        u.quantization.alpha_cutoff,
+        u.quantization.transparency_floor,
+        u.quantization.dither_pattern,
+    );
+}
+
 @fragment
 fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let world = world_from_uv(in.uv);
 
     var ring_accum = vec3<f32>(0.0);
+    var ring_strength = 0.0;
     var horizon = false;
     var horizon_color = vec3<f32>(0.0);
 
@@ -80,10 +124,7 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         let size = max(lens.center_size_shadow.z, 1e-4);
         let rs = lens.center_size_shadow.w;
 
-        let centered = world - center;
-        let dist = length(centered);
-        let r = dist / size; // halo-normalized: rs at horizon, 1 at outer rim.
-
+        let r = length(world - center) / size; // rs at horizon, 1 at outer rim.
         if r > 1.0 {
             continue;
         }
@@ -95,26 +136,37 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         }
 
         // PHOTON RING: Gaussian glow just outside rs via mul-chain.
-        let ring_w = lens.strength_ring.y;
-        let ring_dist = r - rs;
-        let ring_t = clamp(1.0 - ring_dist / (ring_w * 6.0), 0.0, 1.0);
+        let ring_t = clamp(1.0 - (r - rs) / (lens.strength_ring.y * 6.0), 0.0, 1.0);
         let ring_t2 = ring_t * ring_t;
-        let ring_t4 = ring_t2 * ring_t2;
-        let ring_i = ring_t4 * lens.strength_ring.z;
+        let ring_i = ring_t2 * ring_t2 * lens.strength_ring.z;
         ring_accum += lens.photon_ring_color.rgb * ring_i;
+        ring_strength = max(ring_strength, ring_i);
     }
 
+    // Interior of the event horizon is a solid color: no scene, no snap.
     if horizon {
         return vec4<f32>(horizon_color, 1.0);
     }
 
-    // Sample the deflection field at this world position, then read the lit
-    // scene at the deflected world position projected back to screen space.
-    let field_uv = canvas_uv(world);
-    let deflect = textureSample(velocity_field_tex, velocity_field_sampler, field_uv).rg;
-    let lensed_world = world - deflect;
-    let sample_uv = clamp(uv_from_world(lensed_world), vec2<f32>(0.0), vec2<f32>(1.0));
-    let scene = textureSample(scene_tex, scene_sampler, sample_uv).rgb;
+    // Cheap path for the whole screen: the lit scene plus any ring glow, sampled
+    // smoothly at full resolution. Fragments outside the ring band stop here,
+    // so the world-pixel snap and palette match below run only on the ring.
+    let ring_mask = clamp(ring_strength, 0.0, 1.0);
+    let smooth = vec4<f32>(lensed_scene(world) + ring_accum, 1.0);
+    if ring_mask <= 0.0 {
+        return smooth;
+    }
 
-    return vec4<f32>(scene + ring_accum, 1.0);
+    // Photon ring / shadow edge only: snap the sample to the world-pixel grid
+    // (world units already equal physical pixels / camera zoom) so the ring
+    // reads as chunky pixels, then quantize with one Bayer threshold per world
+    // pixel. The bias keeps the dither index non-negative for negative world
+    // coords; 2^23 is a multiple of both Bayer periods (4 and 8) so it does not
+    // shift the pattern, and stays exactly representable in f32 so the modulo is
+    // exact.
+    let cell = floor(world);
+    let snapped = lensed_scene(cell + vec2<f32>(0.5)) + ring_accum;
+    let dither_pos = cell + vec2<f32>(8388608.0);
+    let quantized = maybe_quantize(vec4<f32>(snapped, 1.0), dither_pos);
+    return mix(smooth, quantized, ring_mask);
 }

@@ -503,7 +503,7 @@ pub fn lens_capture_extent(viewport_world_size: Vec2) -> Vec2 {
 #[cfg(feature = "render_2d")]
 fn drive_lensing(
     q_camera: Query<(&Projection, &GlobalTransform), With<LensingHoleCamera>>,
-    q_holes: Query<(&LensingHole, &GlobalTransform)>,
+    q_holes: Query<(&LensingHole, &GlobalTransform, Option<&HoleQuantization>)>,
     field_textures: Option<Res<lensing_field::LensingFieldTextures>>,
     field_settings: Option<Res<lensing_field::LensingFieldSettings>>,
     mut field_source: Option<ResMut<lensing_field::extract::LensingFieldExtractSource>>,
@@ -523,8 +523,11 @@ fn drive_lensing(
 
     // Survivors carry an influence weight for sorting when capping to MAX_LENSES.
     let mut survivors: Vec<(f32, LensData)> = Vec::new();
+    // The photon ring / shadow edge can be palette-quantized; the first lens
+    // carrying a `HoleQuantization` provides the palette for the whole pass.
+    let mut quantization: Option<ColorQuantizeUniforms> = None;
 
-    for (hole, gt) in &q_holes {
+    for (hole, gt, quant) in &q_holes {
         if hole.size <= 1e-3 {
             continue;
         }
@@ -536,6 +539,12 @@ fn drive_lensing(
             || center.y - hole.size > canvas_max.y
         {
             continue;
+        }
+
+        if quantization.is_none()
+            && let Some(q) = quant
+        {
+            quantization = Some(q.to_uniforms());
         }
 
         // Larger, stronger lenses win a slot first when the cap is exceeded.
@@ -563,7 +572,8 @@ fn drive_lensing(
 
     let survivor_lens_data: Vec<LensData> = survivors.into_iter().map(|(_, d)| d).collect();
 
-    // Feed the lens array and canvas geometry into the GPU fluid simulation.
+    // Feed the lens array, canvas geometry, and ring palette into the GPU fluid
+    // simulation's extract source.
     if let Some(ref mut source) = field_source {
         lensing_field::extract::update_lensing_field_source(
             source,
@@ -574,6 +584,7 @@ fn drive_lensing(
             &survivor_lens_data,
             canvas_center,
             canvas_extent,
+            quantization.unwrap_or_default(),
         );
     }
 }

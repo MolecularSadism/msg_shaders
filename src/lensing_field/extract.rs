@@ -10,7 +10,7 @@ use bevy::{
 };
 
 use crate::{
-    LensData, MAX_LENSES,
+    ColorQuantizeUniforms, LensData, MAX_LENSES,
     lensing_field::{LensingFieldSettings, textures::LensingFieldTextures},
 };
 
@@ -26,6 +26,9 @@ pub struct ExtractedLensingField {
     pub lens_photon_ring_color: [Vec4; MAX_LENSES],
     pub lens_black_color: [Vec4; MAX_LENSES],
     pub canvas_center_extent: Vec4,
+    /// Palette for quantizing the photon-ring / shadow-edge region of the
+    /// display pass. `palette_size == 0` disables quantization.
+    pub ring_quantization: ColorQuantizeUniforms,
     pub velocity_read: Handle<Image>,
     pub velocity_write: Handle<Image>,
     pub lens_count: u32,
@@ -42,6 +45,7 @@ impl Default for ExtractedLensingField {
             lens_photon_ring_color: [Vec4::ZERO; MAX_LENSES],
             lens_black_color: [Vec4::ZERO; MAX_LENSES],
             canvas_center_extent: Vec4::new(0.0, 0.0, 1.0, 1.0),
+            ring_quantization: ColorQuantizeUniforms::default(),
             velocity_read: Handle::default(),
             velocity_write: Handle::default(),
             lens_count: 0,
@@ -64,6 +68,7 @@ pub struct LensingFieldExtractSource {
     pub lens_photon_ring_color: [Vec4; MAX_LENSES],
     pub lens_black_color: [Vec4; MAX_LENSES],
     pub canvas_center_extent: Vec4,
+    pub ring_quantization: ColorQuantizeUniforms,
 }
 
 impl Default for LensingFieldExtractSource {
@@ -77,6 +82,7 @@ impl Default for LensingFieldExtractSource {
             lens_photon_ring_color: [Vec4::ZERO; MAX_LENSES],
             lens_black_color: [Vec4::ZERO; MAX_LENSES],
             canvas_center_extent: Vec4::new(0.0, 0.0, 1.0, 1.0),
+            ring_quantization: ColorQuantizeUniforms::default(),
         }
     }
 }
@@ -130,6 +136,7 @@ fn rebuild_extracted_lensing_field(
         lens_photon_ring_color: source.lens_photon_ring_color,
         lens_black_color: source.lens_black_color,
         canvas_center_extent: source.canvas_center_extent,
+        ring_quantization: source.ring_quantization,
         velocity_read: textures.velocity_read().clone(),
         velocity_write: textures.velocity_write().clone(),
         lens_count: source.lens_count,
@@ -149,6 +156,7 @@ pub fn update_lensing_field_source(
     lenses: &[LensData],
     canvas_center: Vec2,
     canvas_extent: Vec2,
+    ring_quantization: ColorQuantizeUniforms,
 ) {
     source.settings = settings.clone();
     source.textures = textures.cloned();
@@ -159,6 +167,7 @@ pub fn update_lensing_field_source(
         canvas_extent.x,
         canvas_extent.y,
     );
+    source.ring_quantization = ring_quantization;
 
     let mut css = [Vec4::ZERO; MAX_LENSES];
     let mut sr = [Vec4::ZERO; MAX_LENSES];
