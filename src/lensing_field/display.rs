@@ -21,11 +21,11 @@ use bevy::render::render_asset::RenderAssets;
 use bevy::render::render_graph::{NodeRunError, RenderGraphContext, RenderLabel, ViewNode};
 use bevy::render::render_resource::binding_types::{sampler, texture_2d, uniform_buffer};
 use bevy::render::render_resource::{
-    BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, CachedRenderPipelineId,
-    ColorTargetState, ColorWrites, FilterMode, FragmentState, MultisampleState, Operations,
-    PipelineCache, PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor,
-    RenderPipelineDescriptor, Sampler, SamplerBindingType, SamplerDescriptor, ShaderStages,
-    ShaderType, SpecializedRenderPipeline, SpecializedRenderPipelines, TextureFormat,
+    BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, CachedPipelineState,
+    CachedRenderPipelineId, ColorTargetState, ColorWrites, FilterMode, FragmentState,
+    MultisampleState, Operations, PipelineCache, PrimitiveState, RenderPassColorAttachment,
+    RenderPassDescriptor, RenderPipelineDescriptor, Sampler, SamplerBindingType, SamplerDescriptor,
+    ShaderStages, ShaderType, SpecializedRenderPipeline, SpecializedRenderPipelines, TextureFormat,
     TextureSampleType, UniformBuffer,
 };
 use bevy::render::renderer::{RenderContext, RenderDevice, RenderQueue};
@@ -167,6 +167,16 @@ impl ViewNode for LensingDisplayNode {
 
         let pipeline_cache = world.resource::<PipelineCache>();
         let pipeline = world.resource::<LensingDisplayPipeline>();
+        // `get_render_pipeline` returns `None` both while the pipeline is still
+        // compiling and after a compile error, so surface the error state — a
+        // WGSL fault would otherwise make this node a silent no-op (the scene
+        // passes through unwarped with no log).
+        if let CachedPipelineState::Err(e) =
+            pipeline_cache.get_render_pipeline_state(pipeline_id.0)
+        {
+            bevy::log::error!("lensing_display pipeline error: {e}");
+            return Ok(());
+        }
         let Some(render_pipeline) = pipeline_cache.get_render_pipeline(pipeline_id.0) else {
             return Ok(());
         };

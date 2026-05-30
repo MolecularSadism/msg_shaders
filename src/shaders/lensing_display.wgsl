@@ -160,9 +160,9 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     // smoothly at full resolution. Fragments outside the ring band stop here,
     // so the world-pixel snap and palette match below run only on the ring.
     let ring_mask = clamp(ring_strength, 0.0, 1.0);
-    let smooth = vec4<f32>(lensed_scene(world) + ring_accum, 1.0);
+    let unsnapped = vec4<f32>(lensed_scene(world) + ring_accum, 1.0);
     if ring_mask <= 0.0 {
-        return smooth;
+        return unsnapped;
     }
 
     // Photon ring / shadow edge only: snap the sample to a world-pixel grid
@@ -188,5 +188,5 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     // pattern, and stays exactly representable in f32 so the modulo is exact.
     let dither_pos = cell + vec2<f32>(8388608.0);
     let quantized = maybe_quantize(vec4<f32>(snapped, 1.0), dither_pos);
-    return mix(smooth, quantized, ring_mask);
+    return mix(unsnapped, quantized, ring_mask);
 }
