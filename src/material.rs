@@ -277,12 +277,9 @@ impl Plugin for MaterialsPlugin {
             if !app.is_plugin_added::<Material2dPlugin<LensingMaterial>>() {
                 app.add_plugins(Material2dPlugin::<LensingMaterial>::default());
             }
-            // Compute shaders for the lensing-field fluid simulation.
+            // Compute shaders for the lensing-field flow simulation.
             embedded_asset!(app, "shaders/lensing_field_inject.wgsl");
             embedded_asset!(app, "shaders/lensing_field_advect.wgsl");
-            embedded_asset!(app, "shaders/lensing_field_divergence.wgsl");
-            embedded_asset!(app, "shaders/lensing_field_pressure_jacobi.wgsl");
-            embedded_asset!(app, "shaders/lensing_field_gradient_subtract.wgsl");
         }
     }
 

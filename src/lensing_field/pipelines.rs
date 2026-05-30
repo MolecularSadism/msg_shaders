@@ -1,11 +1,12 @@
-// Compute pipelines for the lensing-field fluid simulation.
+// Compute pipelines for the lensing-field flow simulation.
 //
-// Five compute shaders handle one fluid frame:
-//   inject    – force injection + velocity decay
-//   advect    – semi-Lagrangian self-advection
-//   divergence – central-difference divergence
-//   pressure  – one Jacobi iteration (ping-pong N times)
-//   gradient  – pressure-gradient subtraction from velocity
+// Two compute shaders handle one frame:
+//   inject — force injection + velocity decay
+//   advect — semi-Lagrangian self-advection
+//
+// Pressure projection is intentionally omitted: gravitational deflection is a
+// gradient field, and projecting it to be divergence-free would cancel the
+// signal and leave only the 4-point stencil's cardinal-axis residual.
 
 use bevy::prelude::*;
 use bevy::render::render_resource::binding_types::{texture_storage_2d, uniform_buffer};
@@ -21,23 +22,15 @@ use crate::lensing_field::extract::ExtractedLensingField;
 
 // ── Uniform sent to every lensing-field compute pass ─────────────────────────
 
-/// Mirrors `LensingFieldUniform` in all five compute shaders.
-///
-/// Contains the full lens array (matching `LensData` from `material.rs`),
-/// simulation parameters, and per-lens count. Kept at one struct so every
-/// shader uses the same bind group layout at binding 0.
+/// Mirrors `LensingFieldUniform` in the compute shaders.
 #[derive(ShaderType, Clone, Copy)]
 pub(crate) struct LensingFieldUniform {
-    /// World-space center (xy), halo radius (z), shadow radius (w) for each lens.
     pub lens_center_size_shadow: [Vec4; crate::MAX_LENSES],
-    /// lensing_strength (x), photon_ring_width (y), photon_ring_intensity (z), pad (w).
     pub lens_strength_ring: [Vec4; crate::MAX_LENSES],
-    /// World-space canvas center (xy) and extent (zw). Used to map grid cells
-    /// to world coordinates in the inject pass.
+    /// Canvas center (xy) and extent (zw) in world space.
     pub canvas_center_extent: Vec4,
-    /// Number of active lenses (0 = no-op dispatch).
     pub lens_count: u32,
-    /// Per-frame velocity decay multiplier.
+    /// Per-frame velocity decay multiplier applied during inject.
     pub decay: f32,
     /// Schwarzschild force scale.
     pub force_scale: f32,
@@ -52,7 +45,7 @@ impl Default for LensingFieldUniform {
             lens_strength_ring: [Vec4::ZERO; crate::MAX_LENSES],
             canvas_center_extent: Vec4::new(0.0, 0.0, 1.0, 1.0),
             lens_count: 0,
-            decay: 0.98,
+            decay: 0.0,
             force_scale: 1.0,
             dt: 0.016,
         }
@@ -61,40 +54,22 @@ impl Default for LensingFieldUniform {
 
 // ── Pipeline resource ─────────────────────────────────────────────────────────
 
-/// Cached compute pipeline IDs and bind group layout descriptors for the five
-/// fluid passes.  Created once in [`FromWorld`] and reused every frame.
 #[derive(Resource)]
 pub struct LensingFieldPipelines {
-    /// Layout for binding 0 in all passes: one uniform buffer.
     pub(crate) layout_uniforms: BindGroupLayoutDescriptor,
-    /// Layout for binding 1 in the inject and advect passes:
-    /// velocity_in (read storage) and velocity_out (write storage).
+    /// Binding 1 layout for inject and advect: velocity_in + velocity_out.
     pub(crate) layout_vel_ping_pong: BindGroupLayoutDescriptor,
-    /// Layout for binding 1 in the divergence pass:
-    /// velocity_in (read), divergence_out (write).
-    pub(crate) layout_divergence: BindGroupLayoutDescriptor,
-    /// Layout for binding 1 in the pressure Jacobi pass:
-    /// divergence (read), pressure_in (read), pressure_out (write).
-    pub(crate) layout_pressure: BindGroupLayoutDescriptor,
-    /// Layout for binding 1 in the gradient subtract pass:
-    /// velocity_in (read), pressure_in (read), velocity_out (write).
-    pub(crate) layout_gradient: BindGroupLayoutDescriptor,
 
-    /// Persistent uniform buffer, uploaded once per frame.
     pub(crate) uniforms: UniformBuffer<LensingFieldUniform>,
 
     pub(crate) pipeline_inject: CachedComputePipelineId,
     pub(crate) pipeline_advect: CachedComputePipelineId,
-    pub(crate) pipeline_divergence: CachedComputePipelineId,
-    pub(crate) pipeline_pressure: CachedComputePipelineId,
-    pub(crate) pipeline_gradient: CachedComputePipelineId,
 }
 
 impl FromWorld for LensingFieldPipelines {
     fn from_world(world: &mut World) -> Self {
         let pipeline_cache = world.resource::<PipelineCache>();
 
-        // Binding 0 in every pass: one non-dynamic uniform.
         let layout_uniforms = BindGroupLayoutDescriptor::new(
             "lensing_field_g0",
             &BindGroupLayoutEntries::sequential(
@@ -103,8 +78,6 @@ impl FromWorld for LensingFieldPipelines {
             ),
         );
 
-        // velocity_in (Rg16Float read-storage) + velocity_out (write-storage).
-        // Used by inject, advect, and gradient passes.
         let layout_vel_ping_pong = BindGroupLayoutDescriptor::new(
             "lensing_field_g1_vel",
             &BindGroupLayoutEntries::sequential(
@@ -116,54 +89,10 @@ impl FromWorld for LensingFieldPipelines {
             ),
         );
 
-        // velocity_in (read) + divergence_out (write).
-        let layout_divergence = BindGroupLayoutDescriptor::new(
-            "lensing_field_g1_divergence",
-            &BindGroupLayoutEntries::sequential(
-                ShaderStages::COMPUTE,
-                (
-                    texture_storage_2d(TextureFormat::Rg16Float, StorageTextureAccess::ReadOnly),
-                    texture_storage_2d(TextureFormat::R16Float, StorageTextureAccess::WriteOnly),
-                ),
-            ),
-        );
-
-        // divergence_in (read, R16) + pressure_in (read, R16) + pressure_out (write, R16).
-        let layout_pressure = BindGroupLayoutDescriptor::new(
-            "lensing_field_g1_pressure",
-            &BindGroupLayoutEntries::sequential(
-                ShaderStages::COMPUTE,
-                (
-                    texture_storage_2d(TextureFormat::R16Float, StorageTextureAccess::ReadOnly),
-                    texture_storage_2d(TextureFormat::R16Float, StorageTextureAccess::ReadOnly),
-                    texture_storage_2d(TextureFormat::R16Float, StorageTextureAccess::WriteOnly),
-                ),
-            ),
-        );
-
-        // velocity_in (read, Rg16) + pressure_in (read, R16) + velocity_out (write, Rg16).
-        let layout_gradient = BindGroupLayoutDescriptor::new(
-            "lensing_field_g1_gradient",
-            &BindGroupLayoutEntries::sequential(
-                ShaderStages::COMPUTE,
-                (
-                    texture_storage_2d(TextureFormat::Rg16Float, StorageTextureAccess::ReadOnly),
-                    texture_storage_2d(TextureFormat::R16Float, StorageTextureAccess::ReadOnly),
-                    texture_storage_2d(TextureFormat::Rg16Float, StorageTextureAccess::WriteOnly),
-                ),
-            ),
-        );
-
         let shader_inject =
             world.load_asset("embedded://msg_shaders/shaders/lensing_field_inject.wgsl");
         let shader_advect =
             world.load_asset("embedded://msg_shaders/shaders/lensing_field_advect.wgsl");
-        let shader_divergence =
-            world.load_asset("embedded://msg_shaders/shaders/lensing_field_divergence.wgsl");
-        let shader_pressure =
-            world.load_asset("embedded://msg_shaders/shaders/lensing_field_pressure_jacobi.wgsl");
-        let shader_gradient =
-            world.load_asset("embedded://msg_shaders/shaders/lensing_field_gradient_subtract.wgsl");
 
         let pipeline_inject = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
             label: Some("lensing_field_inject".into()),
@@ -185,49 +114,12 @@ impl FromWorld for LensingFieldPipelines {
             zero_initialize_workgroup_memory: false,
         });
 
-        let pipeline_divergence =
-            pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
-                label: Some("lensing_field_divergence".into()),
-                entry_point: Some("main".into()),
-                layout: vec![layout_uniforms.clone(), layout_divergence.clone()],
-                push_constant_ranges: vec![],
-                shader: shader_divergence,
-                shader_defs: vec![],
-                zero_initialize_workgroup_memory: false,
-            });
-
-        let pipeline_pressure = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
-            label: Some("lensing_field_pressure_jacobi".into()),
-            entry_point: Some("main".into()),
-            layout: vec![layout_uniforms.clone(), layout_pressure.clone()],
-            push_constant_ranges: vec![],
-            shader: shader_pressure,
-            shader_defs: vec![],
-            zero_initialize_workgroup_memory: false,
-        });
-
-        let pipeline_gradient = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
-            label: Some("lensing_field_gradient_subtract".into()),
-            entry_point: Some("main".into()),
-            layout: vec![layout_uniforms.clone(), layout_gradient.clone()],
-            push_constant_ranges: vec![],
-            shader: shader_gradient,
-            shader_defs: vec![],
-            zero_initialize_workgroup_memory: false,
-        });
-
         Self {
             layout_uniforms,
             layout_vel_ping_pong,
-            layout_divergence,
-            layout_pressure,
-            layout_gradient,
             uniforms: UniformBuffer::default(),
             pipeline_inject,
             pipeline_advect,
-            pipeline_divergence,
-            pipeline_pressure,
-            pipeline_gradient,
         }
     }
 }
@@ -261,9 +153,6 @@ pub(crate) struct LensingFieldPipelinesPlugin;
 
 impl Plugin for LensingFieldPipelinesPlugin {
     fn build(&self, app: &mut App) {
-        // Shader embedding is handled in `material::MaterialsPlugin` alongside
-        // the other msg_shaders embedded assets (from `src/material.rs` where
-        // the path `"shaders/..."` resolves to `src/shaders/...` correctly).
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
         };

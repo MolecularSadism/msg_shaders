@@ -1,9 +1,8 @@
 // Extraction of lensing-field data from the main world into the render world.
 //
 // `ExtractedLensingField` is a render-world resource rebuilt each frame from
-// the main-world `LensingFieldTextures` and `LensingFieldSettings`.  The render
-// node reads it to decide how many Jacobi iterations to run and which texture
-// handles to bind.
+// the main-world `LensingFieldTextures` and `LensingFieldSettings`. The render
+// node reads it to bind the velocity textures and dispatch the compute passes.
 
 use bevy::{
     prelude::*,
@@ -19,50 +18,28 @@ use crate::{
 /// extracted once per frame from the main world.
 #[derive(Resource, Clone)]
 pub struct ExtractedLensingField {
-    /// Jacobi pressure-solve iterations this frame.
-    pub jacobi_iters: u32,
-    /// Force injection scale applied in the inject pass.
     pub force_scale: f32,
-    /// Per-frame velocity decay multiplier (applied during inject).
     pub decay: f32,
-    /// Semi-Lagrangian advection time step.
     pub dt: f32,
-    /// Per-lens packed data: `xy` = world center, `z` = halo radius, `w` = shadow_radius.
     pub lens_center_size_shadow: [Vec4; MAX_LENSES],
-    /// Per-lens packed data: `x` = lensing_strength, `y` = ring_width, `z` = ring_intensity, `w` =
-    /// pad.
     pub lens_strength_ring: [Vec4; MAX_LENSES],
-    /// Canvas center (xy) and extent (zw) in world space.
     pub canvas_center_extent: Vec4,
-    /// Velocity texture the fragment shader reads this frame.
     pub velocity_read: Handle<Image>,
-    /// Velocity texture the compute shader writes this frame.
     pub velocity_write: Handle<Image>,
-    /// Pressure ping texture.
-    pub pressure_ping: Handle<Image>,
-    /// Pressure pong texture.
-    pub pressure_pong: Handle<Image>,
-    /// Divergence scratch texture.
-    pub divergence: Handle<Image>,
-    /// Number of active lenses (0 = skip dispatch).
     pub lens_count: u32,
 }
 
 impl Default for ExtractedLensingField {
     fn default() -> Self {
         Self {
-            jacobi_iters: 8,
             force_scale: 1.0,
-            decay: 0.98,
+            decay: 0.0,
             dt: 0.016,
             lens_center_size_shadow: [Vec4::ZERO; MAX_LENSES],
             lens_strength_ring: [Vec4::ZERO; MAX_LENSES],
             canvas_center_extent: Vec4::new(0.0, 0.0, 1.0, 1.0),
             velocity_read: Handle::default(),
             velocity_write: Handle::default(),
-            pressure_ping: Handle::default(),
-            pressure_pong: Handle::default(),
-            divergence: Handle::default(),
             lens_count: 0,
         }
     }
@@ -122,8 +99,7 @@ impl Plugin for LensingFieldExtractPlugin {
         render_app.init_resource::<ExtractedLensingField>();
         render_app.add_systems(
             bevy::render::ExtractSchedule,
-            rebuild_extracted_lensing_field
-                .run_if(resource_exists::<LensingFieldExtractSource>),
+            rebuild_extracted_lensing_field.run_if(resource_exists::<LensingFieldExtractSource>),
         );
     }
 }
@@ -138,7 +114,6 @@ fn rebuild_extracted_lensing_field(
     };
 
     *extracted = ExtractedLensingField {
-        jacobi_iters: source.settings.jacobi_iters,
         force_scale: source.settings.force_scale,
         decay: source.settings.decay,
         dt: source.settings.dt,
@@ -147,9 +122,6 @@ fn rebuild_extracted_lensing_field(
         canvas_center_extent: source.canvas_center_extent,
         velocity_read: textures.velocity_read().clone(),
         velocity_write: textures.velocity_write().clone(),
-        pressure_ping: textures.pressure_ping.clone(),
-        pressure_pong: textures.pressure_pong.clone(),
-        divergence: textures.divergence.clone(),
         lens_count: source.lens_count,
     };
 }

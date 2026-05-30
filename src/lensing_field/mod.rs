@@ -1,16 +1,15 @@
-// Lensing-field fluid simulation plugin.
+// Lensing-field flow simulation plugin.
 //
-// Runs a lightweight semi-Lagrangian fluid simulation on the GPU each frame to
-// produce a per-frame velocity (deflection) texture for the gravitational-
-// lensing effect.  The fragment shader then samples that texture instead of
-// summing analytic Schwarzschild deflections per-fragment.
+// Runs a per-frame compute pipeline on the GPU that produces a 2-channel
+// velocity texture (the "vector map") sampled by the gravitational-lensing
+// fragment shader for its deflection offsets.
 //
 // Pipeline (per frame, 512×512 grid):
-//   1. inject      – write Schwarzschild forces as velocity, applying decay
-//   2. advect      – semi-Lagrangian self-advection
-//   3. divergence  – central-difference divergence of velocity
-//   4. pressure    – N Jacobi iterations (ping-pong)
-//   5. gradient    – subtract pressure gradient from velocity
+//   1. inject — decay previous velocity, add per-cell Schwarzschild force
+//   2. advect — semi-Lagrangian self-advection
+//
+// Pressure projection is intentionally omitted: lens deflection is a gradient
+// field, and projecting it to be divergence-free cancels the radial signal.
 
 pub(crate) mod extract;
 pub(crate) mod node;
@@ -26,27 +25,22 @@ use crate::lensing_field::{
     pipelines::LensingFieldPipelinesPlugin,
 };
 
-/// Grid resolution of the velocity field (one axis).  The grid is always
+/// Grid resolution of the velocity field (one axis). The grid is always
 /// square: the total texture size is `LENSING_FIELD_RES × LENSING_FIELD_RES`.
-///
-/// Exposed as a constant so downstream code can reference it without reaching
-/// into this module.
 pub const LENSING_FIELD_RES: u32 = 512;
 
-/// Runtime-tunable parameters for the lensing-field fluid simulation.
+/// Runtime-tunable parameters for the lensing-field simulation.
 ///
-/// Insert this resource to override defaults.  Changes take effect on the
+/// Insert this resource to override defaults. Changes take effect on the
 /// next frame; the GPU-side dispatch reads the extracted copy.
 #[derive(Resource, Clone, Reflect)]
 #[reflect(Resource)]
 pub struct LensingFieldSettings {
-    /// Number of Jacobi pressure-solve iterations per frame.
-    /// More iterations → more divergence-free flow, higher GPU cost.
-    pub jacobi_iters: u32,
-    /// Scale applied to the Schwarzschild force when injecting it as velocity.
+    /// Multiplier on the Schwarzschild force injected each frame.
     pub force_scale: f32,
-    /// Per-frame velocity decay multiplier (applied during the inject pass).
-    /// Values close to 1.0 make the field persist longer.
+    /// Per-frame velocity decay multiplier applied during inject.
+    /// `0.0` = no temporal accumulation (fresh field every frame).
+    /// `1.0` would accumulate without bound — keep well below.
     pub decay: f32,
     /// Semi-Lagrangian advection time step.
     pub dt: f32,
@@ -55,18 +49,17 @@ pub struct LensingFieldSettings {
 impl Default for LensingFieldSettings {
     fn default() -> Self {
         Self {
-            jacobi_iters: 8,
             force_scale: 1.0,
-            decay: 0.98,
+            decay: 0.0,
             dt: 0.016,
         }
     }
 }
 
-/// Plugin that manages the GPU lensing-field fluid simulation.
+/// Plugin that manages the GPU lensing-field simulation.
 ///
 /// Add this alongside [`crate::LensingHolePlugin`]; it inserts the compute
-/// render-graph node and manages the ping-pong velocity textures.
+/// render-graph node and manages the velocity texture pair.
 pub struct LensingFieldPlugin;
 
 impl Plugin for LensingFieldPlugin {
@@ -79,7 +72,6 @@ impl Plugin for LensingFieldPlugin {
             LensingFieldPipelinesPlugin,
         ));
 
-        // Allocate the field textures on startup.
         app.add_systems(Startup, allocate_field_textures);
     }
 }
