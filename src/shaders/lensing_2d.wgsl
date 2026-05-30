@@ -2,21 +2,18 @@
 // LENSING 2D SHADER - Combined Gravitational Lensing Flow Field
 // ============================================================================
 // Renders any number of Schwarzschild-style lenses in a single pass over one
-// canvas-covering quad. Each fragment sums every active lens's deflection into
-// one flow field, then samples the scene-capture canvas ONCE — so overlapping
-// lenses mutually warp the space between them instead of stacking independent
-// distortions.
+// canvas-covering quad.  Background deflection comes from a GPU-simulated
+// velocity (flow-field) texture written by compute shaders each frame.  The
+// per-lens loop is still executed for the photon ring and event horizon disc,
+// which must remain sharp and per-lens-colored.
+//
+// If the velocity field texture is not yet available (first frame or no
+// simulation running), the background is sampled straight (zero deflection).
 //
 // Everything is world space: the fragment reads its own world position from the
 // mesh and samples a world-axis-aligned, non-rotating capture texture centered
-// on the camera (`canvas_center`) spanning
-// the viewport diagonal (`canvas_extent`). Camera translation/zoom/rotation are
-// handled by the mesh→screen projection, never re-derived here.
-//
-// Cost is kept low by two culling layers: the CPU gather caps the active set and
-// drops off-screen/negligible lenses, and the per-fragment `r > 1.0` early-out
-// skips any lens whose halo does not cover this fragment. The loop bound is the
-// dynamic `count`, so unused array slots are free.
+// on the camera (`canvas_center`) spanning the viewport diagonal
+// (`canvas_extent`).
 // ============================================================================
 
 #import bevy_sprite::mesh2d_vertex_output::VertexOutput
@@ -55,6 +52,8 @@ struct QuantizationSettings {
 @group(2) @binding(1) var<uniform> quantization: QuantizationSettings;
 @group(2) @binding(2) var background_tex: texture_2d<f32>;
 @group(2) @binding(3) var background_sampler: sampler;
+@group(2) @binding(4) var velocity_field_tex: texture_2d<f32>;
+@group(2) @binding(5) var velocity_field_sampler: sampler;
 
 // Map a world position to the scene-capture canvas UV. The canvas is a square
 // world-axis-aligned region centered on `canvas_center`; V is flipped because
@@ -64,6 +63,7 @@ fn canvas_uv(world: vec2<f32>) -> vec2<f32> {
     let uv = (world - material.canvas_center) / extent + vec2<f32>(0.5);
     return vec2<f32>(uv.x, 1.0 - uv.y);
 }
+
 
 // Quantize the result if a palette is provided, otherwise pass-through.
 fn maybe_quantize(color: vec4<f32>, screen_pos: vec2<f32>) -> vec4<f32> {
@@ -91,7 +91,6 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // One Bayer threshold per world pixel (the canvas is world-pixel aligned).
     let dither_pos = floor(in.position.xy);
 
-    var total_deflect = vec2<f32>(0.0);
     var ring_accum = vec3<f32>(0.0);
     var ring_strength = 0.0;
     var coverage = 0.0;
@@ -130,14 +129,6 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         ring_accum += lens.photon_ring_color.rgb * ring_i;
         ring_strength = max(ring_strength, ring_i);
 
-        // GRAVITATIONAL LENSING: deflection contribution (the flow field — sums).
-        // Smooth Schwarzschild-style magnitude ~ rs * rs / (r - rs), clamped at
-        // the rim so it stays well-behaved near the horizon.
-        let dr = max(r - rs, rs * 0.1);
-        let deflect = lens.strength_ring.x * rs * rs / dr;
-        let dir = centered / max(dist, 1e-5);
-        total_deflect += dir * deflect * size;
-
         // Soft edge fade toward the outer rim; the union covers all lenses.
         coverage = max(coverage, clamp((1.0 - r) * 4.0, 0.0, 1.0));
     }
@@ -145,6 +136,13 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     if horizon {
         return maybe_quantize(vec4<f32>(horizon_color, 1.0), dither_pos);
     }
+
+    // Sample the velocity (deflection) field produced by the GPU fluid simulation.
+    // The field is stored in the same canvas-UV space as the background texture.
+    // When the texture is not yet ready (no lenses or first frame) it defaults
+    // to zero, so the background samples straight through.
+    let field_uv = canvas_uv(world);
+    let total_deflect = textureSample(velocity_field_tex, velocity_field_sampler, field_uv).rg;
 
     let lensed_world = world - total_deflect;
     let sample_uv = canvas_uv(lensed_world);

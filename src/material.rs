@@ -198,6 +198,8 @@ impl Default for LensingUniforms {
 ///
 /// A single canvas-covering quad carries this material; its uniforms hold an
 /// array of lenses gathered from all `LensingHole` entities each frame.
+/// The velocity field texture drives background deflection; see
+/// `LensingFieldPlugin` for how it is produced.
 #[derive(Asset, TypePath, AsBindGroup, Clone, Default)]
 pub struct LensingMaterial {
     #[uniform(0)]
@@ -209,6 +211,13 @@ pub struct LensingMaterial {
     #[texture(2)]
     #[sampler(3)]
     pub background: Option<Handle<Image>>,
+    /// Velocity (deflection) field produced by the GPU fluid simulation.
+    /// Each texel stores a 2D world-space deflection offset (RG channels).
+    /// When `None` (e.g. first frame before the simulation initialises),
+    /// the fragment shader falls back to zero deflection.
+    #[texture(4)]
+    #[sampler(5)]
+    pub velocity_field: Option<Handle<Image>>,
 }
 
 #[cfg(feature = "render_2d")]
@@ -268,6 +277,9 @@ impl Plugin for MaterialsPlugin {
             if !app.is_plugin_added::<Material2dPlugin<LensingMaterial>>() {
                 app.add_plugins(Material2dPlugin::<LensingMaterial>::default());
             }
+            // Compute shaders for the lensing-field flow simulation.
+            embedded_asset!(app, "shaders/lensing_field_inject.wgsl");
+            embedded_asset!(app, "shaders/lensing_field_advect.wgsl");
         }
     }
 
