@@ -11,6 +11,7 @@
 // Pressure projection is intentionally omitted: lens deflection is a gradient
 // field, and projecting it to be divergence-free cancels the radial signal.
 
+pub(crate) mod display;
 pub(crate) mod extract;
 pub(crate) mod node;
 pub(crate) mod pipelines;
@@ -21,8 +22,8 @@ pub use textures::LensingFieldTextures;
 use bevy::prelude::*;
 
 use crate::lensing_field::{
-    extract::LensingFieldExtractPlugin, node::LensingFieldNodePlugin,
-    pipelines::LensingFieldPipelinesPlugin,
+    display::LensingDisplayPlugin, extract::LensingFieldExtractPlugin,
+    node::LensingFieldNodePlugin, pipelines::LensingFieldPipelinesPlugin,
 };
 
 /// Grid resolution of the velocity field (one axis). The grid is always
@@ -70,6 +71,7 @@ impl Plugin for LensingFieldPlugin {
             LensingFieldExtractPlugin,
             LensingFieldNodePlugin,
             LensingFieldPipelinesPlugin,
+            LensingDisplayPlugin,
         ));
 
         app.add_systems(Startup, allocate_field_textures);

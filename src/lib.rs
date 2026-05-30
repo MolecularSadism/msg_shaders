@@ -10,6 +10,7 @@ mod quantize;
 mod quantize_material;
 
 use bevy::prelude::*;
+use bevy::render::extract_component::ExtractComponent;
 #[cfg(feature = "render_2d")]
 pub use lensing_field::{
     LENSING_FIELD_RES, LensingFieldPlugin, LensingFieldSettings, LensingFieldTextures,
@@ -416,7 +417,7 @@ pub struct LensingCanvas;
 /// player sees). The plugin reads its projection and transform to convert each
 /// `LensingHole` entity's world position into the shader's viewport-space
 /// `hole_center`, so callers only need to move the hole entity.
-#[derive(Component, Debug, Clone, Copy, Reflect, Default)]
+#[derive(Component, Debug, Clone, Copy, Reflect, Default, ExtractComponent)]
 #[reflect(Component)]
 pub struct LensingHoleCamera;
 
@@ -484,52 +485,29 @@ pub fn lens_capture_extent(viewport_world_size: Vec2) -> Vec2 {
     Vec2::splat(viewport_world_size.length())
 }
 
-/// Gathers every [`LensingHole`] into the single [`LensingCanvas`] quad's
-/// combined-field material each frame.
+/// Gathers every visible [`LensingHole`] into the lens array driving the GPU
+/// deflection-field simulation each frame.
 ///
-/// The lens is a world-space effect: the shader recovers each fragment's world
-/// position from the mesh and samples the capture canvas by world position, so
-/// camera translation, zoom, and rotation are handled implicitly. This reads the
-/// [`LensingHoleCamera`]'s orthographic projection to derive the canvas center
-/// (the camera position) and the square canvas extent (the viewport diagonal,
-/// see [`lens_capture_extent`]) — matching how the scene-capture camera is sized.
+/// The lens is a world-space effect: it reads the [`LensingHoleCamera`]'s
+/// orthographic projection to derive the canvas center (the camera position) and
+/// the square canvas extent (the viewport diagonal, see [`lens_capture_extent`]),
+/// which the field simulation maps its grid over. The full-screen display pass
+/// then samples that field to warp the lit scene; see [`LensingFieldPlugin`].
 ///
 /// To keep the per-fragment loop cheap with many lenses, the active set is culled
 /// on the CPU: lenses with negligible size are dropped, and those whose halo AABB
 /// does not intersect the canvas square are frustum-culled. Survivors are sorted
-/// by influence and capped to [`MAX_LENSES`]. The canvas quad is a world-axis-
-/// aligned square centered on the camera; the camera's own rotation rotates it on
-/// screen, so the quad itself never rotates.
-///
-/// Also populates `LensingFieldExtractSource` each frame so the GPU fluid
-/// simulation receives the current lens array and canvas geometry.
+/// by influence and capped to [`MAX_LENSES`], then written into
+/// `LensingFieldExtractSource` for extraction to the render world.
 #[cfg(feature = "render_2d")]
 fn drive_lensing(
-    mut commands: Commands,
-    mut materials: ResMut<Assets<LensingMaterial>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    quad_mesh: Option<Res<HoleQuadMesh>>,
-    q_camera: Query<
-        (&Projection, &GlobalTransform),
-        (With<LensingHoleCamera>, Without<LensingCanvas>),
-    >,
-    q_holes: Query<(&LensingHole, &GlobalTransform, Option<&HoleQuantization>)>,
-    mut q_canvas: Query<
-        (
-            Entity,
-            &mut Transform,
-            Option<&MeshMaterial2d<LensingMaterial>>,
-        ),
-        With<LensingCanvas>,
-    >,
+    q_camera: Query<(&Projection, &GlobalTransform), With<LensingHoleCamera>>,
+    q_holes: Query<(&LensingHole, &GlobalTransform)>,
     field_textures: Option<Res<lensing_field::LensingFieldTextures>>,
     field_settings: Option<Res<lensing_field::LensingFieldSettings>>,
     mut field_source: Option<ResMut<lensing_field::extract::LensingFieldExtractSource>>,
 ) {
     let Ok((Projection::Orthographic(ortho), camera_gt)) = q_camera.single() else {
-        return;
-    };
-    let Ok((canvas_entity, mut canvas_tf, material_handle)) = q_canvas.single_mut() else {
         return;
     };
 
@@ -544,10 +522,8 @@ fn drive_lensing(
 
     // Survivors carry an influence weight for sorting when capping to MAX_LENSES.
     let mut survivors: Vec<(f32, LensData)> = Vec::new();
-    let mut background: Option<Handle<Image>> = None;
-    let mut quantization: Option<ColorQuantizeUniforms> = None;
 
-    for (hole, gt, quant) in &q_holes {
+    for (hole, gt) in &q_holes {
         if hole.size <= 1e-3 {
             continue;
         }
@@ -559,15 +535,6 @@ fn drive_lensing(
             || center.y - hole.size > canvas_max.y
         {
             continue;
-        }
-
-        if background.is_none() {
-            background = hole.background.clone();
-        }
-        if quantization.is_none()
-            && let Some(q) = quant
-        {
-            quantization = Some(q.to_uniforms());
         }
 
         // Larger, stronger lenses win a slot first when the cap is exceeded.
@@ -593,19 +560,7 @@ fn drive_lensing(
         survivors.truncate(MAX_LENSES);
     }
 
-    let mut lenses = [LensData::default(); MAX_LENSES];
-    for (slot, (_, data)) in lenses.iter_mut().zip(survivors.iter()) {
-        *slot = *data;
-    }
-
     let survivor_lens_data: Vec<LensData> = survivors.into_iter().map(|(_, d)| d).collect();
-
-    let uniforms = LensingUniforms {
-        canvas_center,
-        canvas_extent,
-        count: survivor_lens_data.len() as u32,
-        lenses,
-    };
 
     // Feed the lens array and canvas geometry into the GPU fluid simulation.
     if let Some(ref mut source) = field_source {
@@ -619,48 +574,6 @@ fn drive_lensing(
             canvas_center,
             canvas_extent,
         );
-    }
-
-    // The material samples the same texture that the compute pipeline's final
-    // pass (gradient subtract) writes into — that's `velocity_write`. The
-    // render-graph edge guarantees the compute completes before the main pass
-    // samples it, so each frame's lensing displays the freshly solved field.
-    let velocity_field = field_textures
-        .as_deref()
-        .map(|t| t.velocity_write().clone());
-
-    // World-axis-aligned square quad covering the whole canvas. The unit quad
-    // mesh is scaled to the canvas extent; the camera's rotation rotates it on
-    // screen, so the quad itself stays unrotated.
-    canvas_tf.translation.x = canvas_center.x;
-    canvas_tf.translation.y = canvas_center.y;
-    canvas_tf.rotation = Quat::IDENTITY;
-    canvas_tf.scale = Vec3::new(canvas_extent.x, canvas_extent.y, 1.0);
-
-    let quantization = quantization.unwrap_or_default();
-
-    if let Some(handle) = material_handle {
-        if let Some(material) = materials.get_mut(&handle.0) {
-            material.uniforms = uniforms;
-            material.quantization = quantization;
-            if material.background.is_none() {
-                material.background = background;
-            }
-            // Update the velocity field handle every frame so the material
-            // always samples the current read-side texture.
-            material.velocity_field = velocity_field;
-        }
-    } else {
-        let mesh_handle = hole_quad_mesh(&mut commands, &mut meshes, quad_mesh.as_deref());
-        let material = materials.add(LensingMaterial {
-            uniforms,
-            quantization,
-            background,
-            velocity_field,
-        });
-        commands
-            .entity(canvas_entity)
-            .insert((Mesh2d(mesh_handle), MeshMaterial2d(material)));
     }
 }
 

@@ -280,6 +280,8 @@ impl Plugin for MaterialsPlugin {
             // Compute shaders for the lensing-field flow simulation.
             embedded_asset!(app, "shaders/lensing_field_inject.wgsl");
             embedded_asset!(app, "shaders/lensing_field_advect.wgsl");
+            // Full-screen lensing display post-process.
+            embedded_asset!(app, "shaders/lensing_display.wgsl");
         }
     }
 

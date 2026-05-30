@@ -23,6 +23,8 @@ pub struct ExtractedLensingField {
     pub dt: f32,
     pub lens_center_size_shadow: [Vec4; MAX_LENSES],
     pub lens_strength_ring: [Vec4; MAX_LENSES],
+    pub lens_photon_ring_color: [Vec4; MAX_LENSES],
+    pub lens_black_color: [Vec4; MAX_LENSES],
     pub canvas_center_extent: Vec4,
     pub velocity_read: Handle<Image>,
     pub velocity_write: Handle<Image>,
@@ -37,6 +39,8 @@ impl Default for ExtractedLensingField {
             dt: 0.016,
             lens_center_size_shadow: [Vec4::ZERO; MAX_LENSES],
             lens_strength_ring: [Vec4::ZERO; MAX_LENSES],
+            lens_photon_ring_color: [Vec4::ZERO; MAX_LENSES],
+            lens_black_color: [Vec4::ZERO; MAX_LENSES],
             canvas_center_extent: Vec4::new(0.0, 0.0, 1.0, 1.0),
             velocity_read: Handle::default(),
             velocity_write: Handle::default(),
@@ -57,6 +61,8 @@ pub struct LensingFieldExtractSource {
     pub lens_count: u32,
     pub lens_center_size_shadow: [Vec4; MAX_LENSES],
     pub lens_strength_ring: [Vec4; MAX_LENSES],
+    pub lens_photon_ring_color: [Vec4; MAX_LENSES],
+    pub lens_black_color: [Vec4; MAX_LENSES],
     pub canvas_center_extent: Vec4,
 }
 
@@ -68,6 +74,8 @@ impl Default for LensingFieldExtractSource {
             lens_count: 0,
             lens_center_size_shadow: [Vec4::ZERO; MAX_LENSES],
             lens_strength_ring: [Vec4::ZERO; MAX_LENSES],
+            lens_photon_ring_color: [Vec4::ZERO; MAX_LENSES],
+            lens_black_color: [Vec4::ZERO; MAX_LENSES],
             canvas_center_extent: Vec4::new(0.0, 0.0, 1.0, 1.0),
         }
     }
@@ -119,6 +127,8 @@ fn rebuild_extracted_lensing_field(
         dt: source.settings.dt,
         lens_center_size_shadow: source.lens_center_size_shadow,
         lens_strength_ring: source.lens_strength_ring,
+        lens_photon_ring_color: source.lens_photon_ring_color,
+        lens_black_color: source.lens_black_color,
         canvas_center_extent: source.canvas_center_extent,
         velocity_read: textures.velocity_read().clone(),
         velocity_write: textures.velocity_write().clone(),
@@ -152,10 +162,16 @@ pub fn update_lensing_field_source(
 
     let mut css = [Vec4::ZERO; MAX_LENSES];
     let mut sr = [Vec4::ZERO; MAX_LENSES];
+    let mut ring = [Vec4::ZERO; MAX_LENSES];
+    let mut black = [Vec4::ZERO; MAX_LENSES];
     for (i, lens) in lenses.iter().take(MAX_LENSES).enumerate() {
         css[i] = lens.center_size_shadow;
         sr[i] = lens.strength_ring;
+        ring[i] = lens.photon_ring_color;
+        black[i] = lens.black_color;
     }
     source.lens_center_size_shadow = css;
     source.lens_strength_ring = sr;
+    source.lens_photon_ring_color = ring;
+    source.lens_black_color = black;
 }
