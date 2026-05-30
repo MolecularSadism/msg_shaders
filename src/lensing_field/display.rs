@@ -13,6 +13,7 @@
 // world space, matching the field's source lenses.
 
 use bevy::core_pipeline::FullscreenShader;
+use bevy::core_pipeline::core_2d::graph::Node2d;
 use bevy::ecs::query::QueryItem;
 use bevy::prelude::*;
 use bevy::render::extract_component::ExtractComponentPlugin;
@@ -32,7 +33,7 @@ use bevy::render::texture::GpuImage;
 use bevy::render::view::{ExtractedView, ViewTarget};
 use bevy::render::{Render, RenderApp, RenderSystems};
 use bevy::shader::Shader;
-use bevy_post_process_2d::{PostProcess2dAppExt, PostProcessOrder};
+use bevy_post_process_2d::PostProcess2dAppExt;
 
 use crate::lensing_field::extract::ExtractedLensingField;
 use crate::{LensData, LensingHoleCamera, MAX_LENSES};
@@ -297,11 +298,18 @@ impl SpecializedRenderPipeline for LensingDisplayPipeline {
 }
 
 /// Render-graph label for the lensing display pass.
+///
+/// Exposed so the host can order it relative to other post-process passes, e.g.
+/// `app.render_after(LensingDisplayLabel, RcCompositeLabel)` to warp the lit
+/// scene.
 #[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
-struct LensingDisplayLabel;
+pub struct LensingDisplayLabel;
 
-/// Registers the full-screen lensing display pass as a post-process node,
-/// ordered after lighting in the shared 2D post-process chain.
+/// Registers the full-screen lensing display pass as a post-process node.
+///
+/// By default it runs between the main pass and the post-processing stack. The
+/// host can refine the ordering — e.g. place it after a lighting composite so it
+/// warps lit pixels — via [`LensingDisplayLabel`].
 pub(crate) struct LensingDisplayPlugin;
 
 impl Plugin for LensingDisplayPlugin {
@@ -309,9 +317,14 @@ impl Plugin for LensingDisplayPlugin {
         // The shader is embedded by `material::MaterialsPlugin`, which this
         // plugin is added alongside.
         app.add_plugins(ExtractComponentPlugin::<LensingHoleCamera>::default());
-        app.add_post_process_2d_node::<LensingDisplayNode>(
+        // Default placement: a full-screen pass between the main pass and the
+        // post-processing stack. The host can additionally order it after a
+        // lighting pass so it warps lit pixels — see [`LensingDisplayLabel`].
+        app.add_post_process_2d_node::<LensingDisplayNode>(LensingDisplayLabel);
+        app.render_between(
             LensingDisplayLabel,
-            PostProcessOrder::DISTORTION,
+            Node2d::EndMainPass,
+            Node2d::StartMainPassPostProcessing,
         );
 
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {

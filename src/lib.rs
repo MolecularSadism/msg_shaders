@@ -14,6 +14,7 @@ use bevy::render::extract_component::ExtractComponent;
 #[cfg(feature = "render_2d")]
 pub use lensing_field::{
     LENSING_FIELD_RES, LensingFieldPlugin, LensingFieldSettings, LensingFieldTextures,
+    display::LensingDisplayLabel,
 };
 pub use material::{
     BlackHoleMaterial, BlackHoleUniforms, LensData, LensingMaterial, LensingUniforms, MAX_LENSES,
