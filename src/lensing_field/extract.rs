@@ -122,7 +122,8 @@ impl Plugin for LensingFieldExtractPlugin {
         render_app.init_resource::<ExtractedLensingField>();
         render_app.add_systems(
             bevy::render::ExtractSchedule,
-            rebuild_extracted_lensing_field,
+            rebuild_extracted_lensing_field
+                .run_if(resource_exists::<LensingFieldExtractSource>),
         );
     }
 }
