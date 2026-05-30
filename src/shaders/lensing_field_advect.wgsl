@@ -61,10 +61,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let vel_here = textureLoad(velocity_in, vec2<i32>(coord)).rg;
 
     // Backward-trace: where did this fluid parcel come from?
-    // Scale dt by RES so `vel` (in world units) maps to grid pixels.
+    // Grid Y increases downward while world Y increases upward (V=0 = world
+    // top), so the Y component of the grid displacement is negated relative to
+    // world-space velocity.
     let extent = u.canvas_center_extent.zw;
     let world_to_grid = FRES / max(extent, vec2<f32>(1e-5, 1e-5));
-    let pos_prev = pos - u.dt * vel_here * world_to_grid;
+    let vel_grid = vel_here * vec2<f32>(world_to_grid.x, -world_to_grid.y);
+    let pos_prev = pos - u.dt * vel_grid;
 
     let advected = sample_bilinear(pos_prev);
 

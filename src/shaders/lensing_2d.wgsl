@@ -64,6 +64,7 @@ fn canvas_uv(world: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(uv.x, 1.0 - uv.y);
 }
 
+
 // Quantize the result if a palette is provided, otherwise pass-through.
 fn maybe_quantize(color: vec4<f32>, screen_pos: vec2<f32>) -> vec4<f32> {
     if quantization.palette_size == 0u {

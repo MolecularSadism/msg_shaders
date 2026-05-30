@@ -134,25 +134,37 @@ impl ViewNode for LensingFieldNode {
             .get_compute_pipeline(pipelines.pipeline_advect)
             .unwrap();
 
-        let mut pass =
-            render_context
-                .command_encoder()
-                .begin_compute_pass(&ComputePassDescriptor {
-                    label: Some("lensing_field"),
-                    timestamp_writes: None,
-                });
+        // Two separate compute passes so wgpu's resource tracker can insert a
+        // Vulkan pipeline barrier between them. inject writes velocity_read;
+        // advect reads it — a single pass cannot barrier between its own
+        // dispatches, which produces a write→read hazard on Vulkan.
+        {
+            let mut pass =
+                render_context
+                    .command_encoder()
+                    .begin_compute_pass(&ComputePassDescriptor {
+                        label: Some("lensing_field_inject"),
+                        timestamp_writes: None,
+                    });
+            pass.set_pipeline(pipe_inject);
+            pass.set_bind_group(0, g0, &[]);
+            pass.set_bind_group(1, g1_inject, &[]);
+            pass.dispatch_workgroups(FIELD_DISPATCH, FIELD_DISPATCH, 1);
+        }
 
-        pass.set_pipeline(pipe_inject);
-        pass.set_bind_group(0, g0, &[]);
-        pass.set_bind_group(1, g1_inject, &[]);
-        pass.dispatch_workgroups(FIELD_DISPATCH, FIELD_DISPATCH, 1);
-
-        pass.set_pipeline(pipe_advect);
-        pass.set_bind_group(0, g0, &[]);
-        pass.set_bind_group(1, g1_advect, &[]);
-        pass.dispatch_workgroups(FIELD_DISPATCH, FIELD_DISPATCH, 1);
-
-        drop(pass);
+        {
+            let mut pass =
+                render_context
+                    .command_encoder()
+                    .begin_compute_pass(&ComputePassDescriptor {
+                        label: Some("lensing_field_advect"),
+                        timestamp_writes: None,
+                    });
+            pass.set_pipeline(pipe_advect);
+            pass.set_bind_group(0, g0, &[]);
+            pass.set_bind_group(1, g1_advect, &[]);
+            pass.dispatch_workgroups(FIELD_DISPATCH, FIELD_DISPATCH, 1);
+        }
 
         Ok(())
     }

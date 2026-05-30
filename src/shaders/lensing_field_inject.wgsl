@@ -26,14 +26,14 @@ struct LensingFieldUniform {
 // Grid resolution (must match LENSING_FIELD_RES on the Rust side).
 const RES: u32 = 512u;
 
-// Map a grid coordinate to world space.
+// Map a grid coordinate to world space. Matches the canvas_uv convention used
+// in the fragment shader: V=0 is world top, V=1 is world bottom, so Y is
+// negated relative to raw uv.y.
 fn grid_to_world(coord: vec2<u32>) -> vec2<f32> {
     let uv = (vec2<f32>(coord) + vec2<f32>(0.5)) / f32(RES);
-    // canvas_center_extent.xy = world-space center; .zw = extent (side lengths).
     let center = u.canvas_center_extent.xy;
     let extent = u.canvas_center_extent.zw;
-    // uv (0→1) maps to center ± extent/2.
-    return center + (uv - vec2<f32>(0.5)) * extent;
+    return center + vec2<f32>(uv.x - 0.5, 0.5 - uv.y) * extent;
 }
 
 @compute @workgroup_size(8, 8, 1)
