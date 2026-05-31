@@ -448,10 +448,6 @@ pub struct LensingHole {
     pub photon_ring_color: [f32; 4],
     /// Event horizon color (linear RGBA).
     pub black_color: [f32; 4],
-    /// Visual rotation of the hole, in radians. Only rotates the photon-ring /
-    /// shadow-edge pixel-snap lattice so the hole looks spun in place; the
-    /// deflection and the rest of the lensing are unaffected.
-    pub rotation: f32,
     /// Background texture sampled by the lens. In game use, set this to the
     /// scene-capture image handle so the hole distorts the actual world.
     pub background: Option<Handle<Image>>,
@@ -473,7 +469,6 @@ impl Default for LensingHole {
             photon_ring_intensity: 1.2,
             photon_ring_color: [0.6, 0.8, 1.0, 1.0],
             black_color: [0.0, 0.0, 0.0, 1.0],
-            rotation: 0.0,
             background: None,
             canvas_center: Vec2::ZERO,
             canvas_extent: Vec2::ONE,
@@ -562,7 +557,7 @@ fn drive_lensing(
                     hole.lensing_strength,
                     hole.photon_ring_width,
                     hole.photon_ring_intensity,
-                    hole.rotation,
+                    0.0,
                 ),
                 photon_ring_color: Vec4::from_array(hole.photon_ring_color),
                 black_color: Vec4::from_array(hole.black_color),
