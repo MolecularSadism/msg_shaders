@@ -18,6 +18,7 @@
 
 #import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
 #import msg_shaders::color_quantize_functions as cq
+#import msg_shaders::pixelate_functions as px
 
 // One lens, packed into four vec4 rows. Must match `LensData` in material.rs.
 struct LensData {
@@ -112,6 +113,16 @@ fn maybe_quantize(color: vec4<f32>, dither_pos: vec2<f32>) -> vec4<f32> {
 fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let world = world_from_uv(in.uv);
 
+    // Snap the per-lens photon ring and shadow edge to the displayed art-pixel
+    // grid so they read as crisp pixel-art blocks, matching the rest of the scene
+    // rather than the finer full-screen display resolution. The lensed background
+    // below keeps the un-snapped world position, so only the ring/shadow band is
+    // pixelated. Cell size and dither phase come from the live world-to-pixel
+    // conversion, never a hardcoded ratio.
+    let cell = px::art_pixel_size(px::world_units_per_pixel(world));
+    let world_px = px::pixelate_world(world, cell);
+    let dither_pos = px::pixel_cell_index(world, cell);
+
     var ring_accum = vec3<f32>(0.0);
     var ring_strength = 0.0;
     var horizon = false;
@@ -124,10 +135,14 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         let size = max(lens.center_size_shadow.z, 1e-4);
         let rs = lens.center_size_shadow.w;
 
-        let r = length(world - center) / size; // rs at horizon, 1 at outer rim.
-        if r > 1.0 {
+        let r_raw = length(world - center) / size; // rs at horizon, 1 at outer rim.
+        if r_raw > 1.0 {
             continue;
         }
+
+        // Snapped radius: a whole art-pixel cell shares one radius, so the horizon
+        // disc and ring band step in pixel blocks instead of smooth circles.
+        let r = length(world_px - center) / size;
 
         // EVENT HORIZON: solid black inside rs (any lens wins).
         if r < rs {
@@ -143,9 +158,10 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         ring_strength = max(ring_strength, ring_i);
     }
 
-    // Interior of the event horizon is a solid color.
+    // Interior of the event horizon is a solid color, palette-quantized so the
+    // shadow and its pixel-snapped edge sit in the same palette as the ring.
     if horizon {
-        return vec4<f32>(horizon_color, 1.0);
+        return maybe_quantize(vec4<f32>(horizon_color, 1.0), dither_pos);
     }
 
     // The lit scene plus any ring glow. Fragments outside the ring band stop
@@ -157,7 +173,7 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     }
 
     // Photon ring / shadow edge only: palette-quantize with one Bayer threshold
-    // per screen pixel, mixed in by the ring mask.
-    let quantized = maybe_quantize(scene, floor(in.position.xy));
+    // per art-pixel cell, mixed in by the ring mask.
+    let quantized = maybe_quantize(scene, dither_pos);
     return mix(scene, quantized, ring_mask);
 }

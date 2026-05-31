@@ -18,6 +18,7 @@
 
 #import bevy_sprite::mesh2d_vertex_output::VertexOutput
 #import msg_shaders::color_quantize_functions as cq
+#import msg_shaders::pixelate_functions as px
 
 // One lens, packed into four vec4 rows. Must match `LensData` in material.rs.
 struct LensData {
@@ -88,8 +89,14 @@ fn maybe_quantize(color: vec4<f32>, screen_pos: vec2<f32>) -> vec4<f32> {
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // True world position from the mesh; all lens math stays in world space.
     let world = in.world_position.xy;
-    // One Bayer threshold per world pixel (the canvas is world-pixel aligned).
-    let dither_pos = floor(in.position.xy);
+    // Snap the photon ring and shadow edge to the displayed art-pixel grid so they
+    // read as crisp pixel-art blocks; the lensed background keeps the un-snapped
+    // world position. Cell size and dither phase derive from the live world-to-pixel
+    // conversion, not a hardcoded ratio.
+    let cell = px::art_pixel_size(px::world_units_per_pixel(world));
+    let world_px = px::pixelate_world(world, cell);
+    // One Bayer threshold per art-pixel cell so each block quantizes as a unit.
+    let dither_pos = px::pixel_cell_index(world, cell);
 
     var ring_accum = vec3<f32>(0.0);
     var ring_strength = 0.0;
@@ -104,14 +111,16 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         let size = max(lens.center_size_shadow.z, 1e-4);
         let rs = lens.center_size_shadow.w;
 
-        let centered = world - center;
-        let dist = length(centered);
-        let r = dist / size; // halo-normalized: rs at horizon, 1 at outer rim.
+        let r_raw = length(world - center) / size; // halo-normalized: rs at horizon, 1 at rim.
 
         // Per-fragment cull: this lens's halo does not cover the fragment.
-        if r > 1.0 {
+        if r_raw > 1.0 {
             continue;
         }
+
+        // Snapped radius: a whole art-pixel cell shares one radius, so the horizon
+        // disc and photon ring step in pixel blocks instead of smooth circles.
+        let r = length(world_px - center) / size;
 
         // EVENT HORIZON: solid black inside rs (any lens wins).
         if r < rs {
@@ -129,8 +138,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         ring_accum += lens.photon_ring_color.rgb * ring_i;
         ring_strength = max(ring_strength, ring_i);
 
-        // Soft edge fade toward the outer rim; the union covers all lenses.
-        coverage = max(coverage, clamp((1.0 - r) * 4.0, 0.0, 1.0));
+        // Soft edge fade toward the outer rim uses the un-snapped radius so the
+        // halo alpha stays smooth; only the ring + shadow edge are pixel-snapped.
+        coverage = max(coverage, clamp((1.0 - r_raw) * 4.0, 0.0, 1.0));
     }
 
     if horizon {
