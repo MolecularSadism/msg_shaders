@@ -96,11 +96,18 @@ fn uv_from_world(world: vec2<f32>) -> vec2<f32> {
 }
 
 // Lit scene at a world position: deflect by the field, project back to screen,
-// sample the view target (clamped to the visible region).
+// sample the view target. When the deflected position projects outside the
+// visible target the scene read is skipped — that light comes from off-screen
+// and reads as black, and the read is the dominant per-fragment cost once the
+// hole covers the viewport. `textureSampleLevel` is used so the skip can live in
+// per-fragment control flow (implicit-derivative sampling demands uniformity).
 fn lensed_scene(world: vec2<f32>) -> vec3<f32> {
     let deflect = textureSample(velocity_field_tex, velocity_field_sampler, canvas_uv(world)).rg;
-    let sample_uv = clamp(uv_from_world(world - deflect), vec2<f32>(0.0), vec2<f32>(1.0));
-    return textureSample(scene_tex, scene_sampler, sample_uv).rgb;
+    let sample_uv = uv_from_world(world - deflect);
+    if any(sample_uv < vec2<f32>(0.0)) || any(sample_uv > vec2<f32>(1.0)) {
+        return vec3<f32>(0.0);
+    }
+    return textureSampleLevel(scene_tex, scene_sampler, sample_uv, 0.0).rgb;
 }
 
 // Palette-quantize a color; pass-through when no palette is configured.
