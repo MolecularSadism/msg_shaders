@@ -205,8 +205,7 @@ impl ViewNode for LensingDisplayNode {
         // compiling and after a compile error, so surface the error state — a
         // WGSL fault would otherwise make this node a silent no-op (the scene
         // passes through unwarped with no log).
-        if let CachedPipelineState::Err(e) =
-            pipeline_cache.get_render_pipeline_state(pipeline_id.0)
+        if let CachedPipelineState::Err(e) = pipeline_cache.get_render_pipeline_state(pipeline_id.0)
         {
             bevy::log::error!("lensing_display pipeline error: {e}");
             return Ok(());
