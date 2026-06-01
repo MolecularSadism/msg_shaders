@@ -2,7 +2,7 @@
 //
 // Per frame: inject (write decayed previous + per-cell Schwarzschild force
 // into `velocity_read`), then semi-Lagrangian advect (read `velocity_read`,
-// write `velocity_write`). `LensingMaterial` samples `velocity_write`.
+// write `velocity_write`). The lensing display pass samples `velocity_write`.
 
 use bevy::core_pipeline::core_2d::graph::{Core2d, Node2d};
 use bevy::prelude::*;
@@ -186,7 +186,7 @@ impl Plugin for LensingFieldNodePlugin {
             )
             .add_render_graph_node::<ViewNodeRunner<LensingFieldNode>>(Core2d, LensingFieldLabel)
             // The simulation must finish before the 2D main pass samples the
-            // velocity texture in LensingMaterial.
+            // velocity texture in the lensing display pass.
             .add_render_graph_edges(Core2d, (LensingFieldLabel, Node2d::StartMainPass));
     }
 }

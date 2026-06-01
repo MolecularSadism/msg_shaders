@@ -95,18 +95,15 @@ fn uv_from_world(world: vec2<f32>) -> vec2<f32> {
     return u.viewport_rect.xy + vp_uv * u.viewport_rect.zw;
 }
 
-// Lit scene at a world position: deflect by the field, project back to screen,
-// sample the view target. When the deflected position projects outside the
-// visible target the scene read is skipped — that light comes from off-screen
-// and reads as black, and the read is the dominant per-fragment cost once the
-// hole covers the viewport. `textureSampleLevel` is used so the skip can live in
+// Lit scene at a world position: deflect by the field, project the deflected
+// world position back to screen, sample the view target. The deflected sample
+// is never culled for landing off-screen — the clamp-to-edge sampler reads the
+// border texel, so a strongly-deflected fragment pulls in the screen edge
+// rather than collapsing to black. `textureSampleLevel` keeps the read in
 // per-fragment control flow (implicit-derivative sampling demands uniformity).
 fn lensed_scene(world: vec2<f32>) -> vec3<f32> {
     let deflect = textureSample(velocity_field_tex, velocity_field_sampler, canvas_uv(world)).rg;
     let sample_uv = uv_from_world(world - deflect);
-    if any(sample_uv < vec2<f32>(0.0)) || any(sample_uv > vec2<f32>(1.0)) {
-        return vec3<f32>(0.0);
-    }
     return textureSampleLevel(scene_tex, scene_sampler, sample_uv, 0.0).rgb;
 }
 
@@ -172,8 +169,12 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         // circles.
         let r = length(px::pixelate_world(px::rotate2d(centered, -angle), cell)) / size;
 
-        // EVENT HORIZON: solid black inside rs (any lens wins).
-        if r < rs {
+        // EVENT HORIZON: solid black inside rs (any lens wins). Tested against
+        // both the snapped radius (so the disc edge steps in pixel blocks) and
+        // the smooth radius (so the geometric interior is always covered). The
+        // block snapping can then only push the black outward, never expose the
+        // strongly-deflected scene inside the shadow as a lensed speckle.
+        if r < rs || r_raw < rs {
             horizon = true;
             horizon_color = lens.black_color.rgb;
         }
@@ -193,16 +194,20 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
+    // Interior of the event horizon is a solid color, pre-snapped to the ring
+    // palette on the CPU (`LensData.black_color`). Returning it directly is the
+    // early-out for the full-coverage cinematic: every covered fragment writes a
+    // constant color and skips both the deflected scene read and the per-pixel
+    // palette match. The pixel-snapped edge is carried by the snapped radius `r`,
+    // so the shadow boundary still reads as blocks.
+    if horizon {
+        return vec4<f32>(horizon_color, 1.0);
+    }
+
     // Dither phase per art-pixel cell, in the owning lens's centered (unrotated)
     // frame so the quantized blocks stay locked to the hole as it moves. Rotation
     // is confined to the ring/shadow geometry above, never the lensed background.
     let dither_pos = px::pixel_cell_index(world - active_center, cell);
-
-    // Interior of the event horizon is a solid color, palette-quantized so the
-    // shadow and its pixel-snapped edge sit in the same palette as the ring.
-    if horizon {
-        return maybe_quantize(vec4<f32>(horizon_color, 1.0), dither_pos);
-    }
 
     // The lit scene plus any ring glow. Fragments outside the ring band stop
     // here, so the palette match below runs only on the ring.

@@ -177,7 +177,12 @@ pub fn update_lensing_field_source(
         css[i] = lens.center_size_shadow;
         sr[i] = lens.strength_ring;
         ring[i] = lens.photon_ring_color;
-        black[i] = lens.black_color;
+        // Pre-snap the solid shadow fill into the ring palette here, so the
+        // event-horizon interior writes a constant color in the display shader
+        // rather than running the per-pixel palette match across the whole
+        // screen when the hole grows to full coverage.
+        let snapped = ring_quantization.nearest_palette_color(lens.black_color.truncate());
+        black[i] = snapped.extend(lens.black_color.w);
     }
     source.lens_center_size_shadow = css;
     source.lens_strength_ring = sr;

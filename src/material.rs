@@ -131,12 +131,12 @@ impl Material2d for BlackHoleMaterial {
     }
 }
 
-/// Maximum number of lenses combined in a single [`LensingMaterial`] pass.
+/// Maximum number of lenses combined in a single lensing pass.
 ///
 /// The CPU gather culls (frustum + size threshold) and caps the active set to
 /// this many; the shader loops only over `count <= MAX_LENSES`, so empty slots
 /// cost nothing. At 64 B/lens this is a 4 KB uniform, well under the 64 KB limit.
-/// Kept in sync with the `array<LensData, …>` size in `lensing_2d.wgsl`.
+/// Kept in sync with the `array<LensData, …>` size in `lensing_display.wgsl`.
 pub const MAX_LENSES: usize = 64;
 
 /// One lens packed for the combined-field shader. Four 16-byte rows (64 B).
@@ -164,77 +164,6 @@ impl Default for LensData {
             photon_ring_color: Vec4::ZERO,
             black_color: Vec4::new(0.0, 0.0, 0.0, 1.0),
         }
-    }
-}
-
-/// Uniforms for the combined multi-lens shader.
-///
-/// All lenses share one scene-capture canvas, so the canvas geometry is stored
-/// once. Each fragment sums every active lens's Schwarzschild deflection into a
-/// single flow field, then samples the canvas once — so overlapping lenses warp
-/// the space between them mutually rather than stacking independent distortions.
-#[derive(Clone, Copy, ShaderType)]
-pub struct LensingUniforms {
-    /// World-space center of the square scene-capture canvas (camera position).
-    pub canvas_center: Vec2,
-    /// World-space side lengths of the square canvas (viewport diagonal).
-    pub canvas_extent: Vec2,
-    /// Number of populated entries in `lenses`. The shader loops `0..count`.
-    pub count: u32,
-    pub lenses: [LensData; MAX_LENSES],
-}
-
-impl Default for LensingUniforms {
-    fn default() -> Self {
-        Self {
-            canvas_center: Vec2::ZERO,
-            canvas_extent: Vec2::ONE,
-            count: 0,
-            lenses: [LensData::default(); MAX_LENSES],
-        }
-    }
-}
-
-/// Material for the combined gravitational-lensing pass.
-///
-/// A single canvas-covering quad carries this material; its uniforms hold an
-/// array of lenses gathered from all `LensingHole` entities each frame.
-/// The velocity field texture drives background deflection; see
-/// `LensingFieldPlugin` for how it is produced.
-#[derive(Asset, TypePath, AsBindGroup, Clone, Default)]
-pub struct LensingMaterial {
-    #[uniform(0)]
-    pub uniforms: LensingUniforms,
-    #[uniform(1)]
-    pub quantization: ColorQuantizeUniforms,
-    /// Background to distort (the scene-capture image). Nearest-filtered to
-    /// preserve the canvas's pixel grid.
-    #[texture(2)]
-    #[sampler(3)]
-    pub background: Option<Handle<Image>>,
-    /// Velocity (deflection) field produced by the GPU fluid simulation.
-    /// Each texel stores a 2D world-space deflection offset (RG channels).
-    /// When `None` (e.g. first frame before the simulation initialises),
-    /// the fragment shader falls back to zero deflection.
-    #[texture(4)]
-    #[sampler(5)]
-    pub velocity_field: Option<Handle<Image>>,
-}
-
-#[cfg(feature = "render_2d")]
-impl Material2d for LensingMaterial {
-    fn fragment_shader() -> ShaderRef {
-        "embedded://msg_shaders/shaders/lensing_2d.wgsl".into()
-    }
-
-    // The single canvas-covering quad writes every canvas pixel exactly once, so
-    // no in-canvas blending is required. Writing the fragment's straight (un-
-    // premultiplied) color and alpha through keeps the alpha composite for the
-    // canvas sprite's own blend over the world. Blending here instead would
-    // premultiply the stored color, which the sprite then multiplies by alpha a
-    // second time — darkening soft edges into a grey halo.
-    fn alpha_mode(&self) -> AlphaMode2d {
-        AlphaMode2d::Opaque
     }
 }
 
@@ -273,10 +202,6 @@ impl Plugin for MaterialsPlugin {
             embedded_asset!(app, "shaders/blackhole_2d.wgsl");
             if !app.is_plugin_added::<Material2dPlugin<BlackHoleMaterial>>() {
                 app.add_plugins(Material2dPlugin::<BlackHoleMaterial>::default());
-            }
-            embedded_asset!(app, "shaders/lensing_2d.wgsl");
-            if !app.is_plugin_added::<Material2dPlugin<LensingMaterial>>() {
-                app.add_plugins(Material2dPlugin::<LensingMaterial>::default());
             }
             // Compute shaders for the lensing-field flow simulation.
             embedded_asset!(app, "shaders/lensing_field_inject.wgsl");

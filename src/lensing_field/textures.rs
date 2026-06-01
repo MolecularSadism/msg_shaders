@@ -3,7 +3,7 @@
 // Two Rg16Float velocity textures at LENSING_FIELD_RES². Within each frame
 // the inject pass writes the decayed-plus-force-injected field into one
 // (the "intermediate"), advect reads it and writes the advected result into
-// the other (the "persistent state"). `LensingMaterial` samples the
+// the other (the "persistent state"). The lensing display pass samples the
 // persistent-state handle; the next frame's inject reads the same handle to
 // recover last frame's field.
 

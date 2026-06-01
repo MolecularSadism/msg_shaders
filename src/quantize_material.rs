@@ -109,6 +109,34 @@ pub struct ColorQuantizeUniforms {
     pub transparency_floor: f32,
 }
 
+impl ColorQuantizeUniforms {
+    /// Nearest palette color (linear RGB) to `color`, matched in Oklab with no
+    /// dithering. Returns `color` unchanged when no palette is configured.
+    ///
+    /// Mirrors `find_nearest_palette_color` in `color_quantize_functions.wgsl`
+    /// with a zero dither offset, so a solid fill can be pre-snapped on the CPU
+    /// once instead of paying the per-pixel palette match in a fragment shader.
+    #[must_use]
+    pub fn nearest_palette_color(&self, color: Vec3) -> Vec3 {
+        if self.palette_size == 0 {
+            return color;
+        }
+        let (l, a, b) = linear_rgb_to_oklab(color.x, color.y, color.z);
+        let target = Vec3::new(l, a, b);
+        let mut best_distance = f32::MAX;
+        let mut best = color;
+        for i in 0..self.palette_size as usize {
+            let diff = target - self.palette_oklab[i].truncate();
+            let distance = diff.dot(diff);
+            if distance < best_distance {
+                best_distance = distance;
+                best = self.palette[i].truncate();
+            }
+        }
+        best
+    }
+}
+
 impl Default for ColorQuantizeUniforms {
     fn default() -> Self {
         Self {

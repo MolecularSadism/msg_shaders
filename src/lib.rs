@@ -16,9 +16,7 @@ pub use lensing_field::{
     LENSING_FIELD_RES, LensingFieldPlugin, LensingFieldSettings, LensingFieldTextures,
     display::LensingDisplayLabel,
 };
-pub use material::{
-    BlackHoleMaterial, BlackHoleUniforms, LensData, LensingMaterial, LensingUniforms, MAX_LENSES,
-};
+pub use material::{BlackHoleMaterial, BlackHoleUniforms, LensData, MAX_LENSES};
 
 // Color quantization (reusable across materials).
 pub use quantize::{
@@ -37,9 +35,9 @@ pub mod prelude {
     pub use super::{
         BlackHole, BlackHoleColors, BlackHoleGeometry, BlackHolePlugin, BlackHoleQuantization,
         ColorQuantizationPlugin, ColorQuantizeMaterial, ColorQuantizeUniforms, DitherPattern,
-        HoleQuantization, LensingCanvas, LensingHole, LensingHoleCamera, LensingHolePlugin,
-        LensingMaterial, MAX_PALETTE_COLORS, PixelateConfig, PixelateMaterial, PixelationPlugin,
-        QuantizationConfig, QuantizePixelateMaterial, lens_capture_extent,
+        HoleQuantization, LensingHole, LensingHoleCamera, LensingHolePlugin, MAX_PALETTE_COLORS,
+        PixelateConfig, PixelateMaterial, PixelationPlugin, QuantizationConfig,
+        QuantizePixelateMaterial, lens_capture_extent,
     };
     #[cfg(feature = "render_2d")]
     pub use super::{LENSING_FIELD_RES, LensingFieldPlugin, LensingFieldSettings};
@@ -396,21 +394,9 @@ impl Plugin for LensingHolePlugin {
         app.add_plugins(LensingFieldPlugin);
         app.register_type::<LensingHole>();
         app.register_type::<LensingHoleCamera>();
-        app.register_type::<LensingCanvas>();
         app.add_systems(Update, drive_lensing);
     }
 }
-
-/// Marker for the persistent canvas-covering quad that renders all lenses in one
-/// combined pass.
-///
-/// The owning app spawns exactly one entity with this marker plus the render
-/// layer the lens overlay draws on, a `Transform`, and `Visibility`. The plugin
-/// fills in the `Mesh2d` + `MeshMaterial2d::<LensingMaterial>` on first run
-/// and drives the material's lens array each frame; see [`drive_lensing`].
-#[derive(Component, Debug, Clone, Copy, Reflect, Default)]
-#[reflect(Component)]
-pub struct LensingCanvas;
 
 /// Marker for the orthographic camera the lensing hole projects against.
 ///
