@@ -28,6 +28,7 @@ use bevy::render::render_resource::{
     ShaderStages, ShaderType, SpecializedRenderPipeline, SpecializedRenderPipelines, TextureFormat,
     TextureSampleType, UniformBuffer,
 };
+use bevy::render::camera::ExtractedCamera;
 use bevy::render::renderer::{RenderContext, RenderDevice, RenderQueue};
 use bevy::render::texture::GpuImage;
 use bevy::render::view::{ExtractedView, ViewTarget};
@@ -55,6 +56,10 @@ struct LensingDisplayUniform {
     /// `xy` = canvas world-space center, `zw` = canvas world-space extent. The
     /// field is sampled in this canvas's UV space.
     canvas_center_extent: Vec4,
+    /// Camera viewport within the render target, normalized by target size.
+    /// `xy` = viewport origin / target size, `zw` = viewport size / target size.
+    /// `(0, 0, 1, 1)` when no viewport is set (full-target render).
+    viewport_rect: Vec4,
     /// Palette quantization applied only to the photon-ring / shadow-edge band.
     /// `palette_size == 0` disables it.
     quantization: ColorQuantizeUniforms,
@@ -69,6 +74,7 @@ impl Default for LensingDisplayUniform {
             clip_from_world: Mat4::IDENTITY,
             world_from_clip: Mat4::IDENTITY,
             canvas_center_extent: Vec4::new(0.0, 0.0, 1.0, 1.0),
+            viewport_rect: Vec4::new(0.0, 0.0, 1.0, 1.0),
             quantization: ColorQuantizeUniforms::default(),
             count: 0,
             lenses: [LensData::default(); MAX_LENSES],
@@ -87,18 +93,45 @@ struct LensingDisplayUniforms {
 fn prepare_lensing_display_uniforms(
     mut uniforms: ResMut<LensingDisplayUniforms>,
     extracted: Res<ExtractedLensingField>,
-    views: Query<&ExtractedView, With<LensingHoleCamera>>,
+    views: Query<(&ExtractedView, &ExtractedCamera), With<LensingHoleCamera>>,
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
 ) {
-    let clip_from_world = views
+    let (clip_from_world, viewport_rect) = views
         .iter()
         .next()
-        .map(|ev| {
-            ev.clip_from_world
-                .unwrap_or_else(|| ev.clip_from_view * ev.world_from_view.to_matrix().inverse())
+        .map(|(ev, cam)| {
+            let cfworld = ev
+                .clip_from_world
+                .unwrap_or_else(|| ev.clip_from_view * ev.world_from_view.to_matrix().inverse());
+
+            // The display pass renders to the full target texture (no GPU viewport
+            // set on the render pass). When the camera has a sub-window viewport
+            // (e.g. the dev inspector clips the game area), the projection matrices
+            // are sized to the viewport, not the full target. The shader must know
+            // the viewport's position and extent within the full target so it can
+            // correctly map full-target UVs to viewport-relative NDC.
+            let vp_rect = match (cam.physical_viewport_size, cam.physical_target_size) {
+                (Some(vp_size), Some(target_size))
+                    if target_size.x > 0 && target_size.y > 0 =>
+                {
+                    let origin = cam
+                        .viewport
+                        .as_ref()
+                        .map_or(UVec2::ZERO, |v| v.physical_position);
+                    Vec4::new(
+                        origin.x as f32 / target_size.x as f32,
+                        origin.y as f32 / target_size.y as f32,
+                        vp_size.x as f32 / target_size.x as f32,
+                        vp_size.y as f32 / target_size.y as f32,
+                    )
+                }
+                _ => Vec4::new(0.0, 0.0, 1.0, 1.0),
+            };
+
+            (cfworld, vp_rect)
         })
-        .unwrap_or(Mat4::IDENTITY);
+        .unwrap_or((Mat4::IDENTITY, Vec4::new(0.0, 0.0, 1.0, 1.0)));
 
     let count = extracted.lens_count.min(MAX_LENSES as u32);
     let mut lenses = [LensData::default(); MAX_LENSES];
@@ -115,6 +148,7 @@ fn prepare_lensing_display_uniforms(
         clip_from_world,
         world_from_clip: clip_from_world.inverse(),
         canvas_center_extent: extracted.canvas_center_extent,
+        viewport_rect,
         quantization: extracted.ring_quantization,
         count,
         lenses,

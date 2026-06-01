@@ -47,6 +47,9 @@ struct LensingDisplay {
     world_from_clip: mat4x4<f32>,
     // xy = canvas world-space center, zw = canvas world-space extent.
     canvas_center_extent: vec4<f32>,
+    // xy = viewport origin / target size, zw = viewport size / target size.
+    // (0, 0, 1, 1) when no viewport is set (full-target render).
+    viewport_rect: vec4<f32>,
     quantization: QuantizationSettings,
     count: u32,
     lenses: array<LensData, 64>,
@@ -68,18 +71,28 @@ fn canvas_uv(world: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(uv.x, 1.0 - uv.y);
 }
 
-// Reconstruct the world-space position of a screen pixel from its UV.
+// Reconstruct the world-space position of a screen pixel from its full-target UV.
+//
+// The display pass renders to the full target texture without a GPU viewport,
+// so `in.uv` spans the entire target. The camera's clip_from_world is sized to
+// the sub-window viewport (e.g. the dev inspector game area). Correct by
+// converting the full-target UV to a viewport-relative UV first, then to NDC.
 fn world_from_uv(uv: vec2<f32>) -> vec2<f32> {
-    let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    let vp_uv = (uv - u.viewport_rect.xy) / max(u.viewport_rect.zw, vec2<f32>(1e-5));
+    let ndc = vec2<f32>(vp_uv.x * 2.0 - 1.0, 1.0 - vp_uv.y * 2.0);
     let world = u.world_from_clip * vec4<f32>(ndc, 0.0, 1.0);
     return world.xy / world.w;
 }
 
-// Project a world-space position to screen UV.
+// Project a world-space position to full-target UV.
+//
+// Produces a UV suitable for sampling the full-target scene texture, accounting
+// for the viewport sub-region that clip_from_world maps to.
 fn uv_from_world(world: vec2<f32>) -> vec2<f32> {
     let clip = u.clip_from_world * vec4<f32>(world, 0.0, 1.0);
     let ndc = clip.xy / clip.w;
-    return vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    let vp_uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    return u.viewport_rect.xy + vp_uv * u.viewport_rect.zw;
 }
 
 // Lit scene at a world position: deflect by the field, project back to screen,
