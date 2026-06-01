@@ -113,20 +113,22 @@ fn maybe_quantize(color: vec4<f32>, dither_pos: vec2<f32>) -> vec4<f32> {
 fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let world = world_from_uv(in.uv);
 
-    // Snap the per-lens photon ring and shadow edge to the displayed art-pixel
-    // grid so they read as crisp pixel-art blocks, matching the rest of the scene
-    // rather than the finer full-screen display resolution. The lensed background
-    // below keeps the un-snapped world position, so only the ring/shadow band is
-    // pixelated. Cell size and dither phase come from the live world-to-pixel
-    // conversion, never a hardcoded ratio.
+    // Pixel size for the photon ring and shadow edge: the world span of one
+    // displayed art pixel, from the live world-to-pixel conversion (never a
+    // hardcoded ratio). The grid is anchored per lens (below), not to the world,
+    // so the hole keeps smooth sub-pixel movement while its edge reads as blocks.
     let cell = px::art_pixel_size(px::world_units_per_pixel(world));
-    let world_px = px::pixelate_world(world, cell);
-    let dither_pos = px::pixel_cell_index(world, cell);
 
     var ring_accum = vec3<f32>(0.0);
     var ring_strength = 0.0;
     var horizon = false;
     var horizon_color = vec3<f32>(0.0);
+    // Center of the lens owning this fragment, so the dither cell is measured from
+    // the hole's center — the quantized blocks ride with the moving hole. The
+    // dither is deliberately NOT rotated: rotation belongs to the ring/shadow
+    // geometry only, so the lensed background quantized here never spins.
+    var active_center = vec2<f32>(0.0);
+    var active_weight = -1.0;
 
     let count = min(u.count, MAX_LENSES);
     for (var i = 0u; i < count; i = i + 1u) {
@@ -135,14 +137,20 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         let size = max(lens.center_size_shadow.z, 1e-4);
         let rs = lens.center_size_shadow.w;
 
-        let r_raw = length(world - center) / size; // rs at horizon, 1 at outer rim.
+        let angle = lens.strength_ring.w; // hole z-rotation in radians
+        let centered = world - center;
+        let r_raw = length(centered) / size; // rs at horizon, 1 at outer rim.
         if r_raw > 1.0 {
             continue;
         }
 
-        // Snapped radius: a whole art-pixel cell shares one radius, so the horizon
-        // disc and ring band step in pixel blocks instead of smooth circles.
-        let r = length(world_px - center) / size;
+        // Snapped radius: pixelate the offset in the hole's own rotated frame.
+        // Rotating the centered offset by -angle aligns the block grid to (and
+        // spins it with) the hole's rotation; the grid rides with the hole and
+        // stays smooth under motion. A whole art-pixel cell shares one radius,
+        // stepping the horizon disc and ring band in pixel blocks, not smooth
+        // circles.
+        let r = length(px::pixelate_world(px::rotate2d(centered, -angle), cell)) / size;
 
         // EVENT HORIZON: solid black inside rs (any lens wins).
         if r < rs {
@@ -156,7 +164,19 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         let ring_i = ring_t2 * ring_t2 * lens.strength_ring.z;
         ring_accum += lens.photon_ring_color.rgb * ring_i;
         ring_strength = max(ring_strength, ring_i);
+
+        // Horizon dominates; otherwise the strongest ring owns the fragment's center.
+        let weight = select(ring_i, 1e9, r < rs);
+        if weight > active_weight {
+            active_weight = weight;
+            active_center = center;
+        }
     }
+
+    // Dither phase per art-pixel cell, in the owning lens's centered (unrotated)
+    // frame so the quantized blocks stay locked to the hole as it moves. Rotation
+    // is confined to the ring/shadow geometry above, never the lensed background.
+    let dither_pos = px::pixel_cell_index(world - active_center, cell);
 
     // Interior of the event horizon is a solid color, palette-quantized so the
     // shadow and its pixel-snapped edge sit in the same palette as the ring.

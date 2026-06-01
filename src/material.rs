@@ -149,7 +149,8 @@ pub struct LensData {
     /// (event-horizon radius as a fraction of the halo).
     pub center_size_shadow: Vec4,
     /// `x` = lensing strength, `y` = photon ring width, `z` = photon ring
-    /// intensity, `w` = padding.
+    /// intensity, `w` = hole z-rotation (radians), used to rotate the pixel-snap
+    /// grid into the hole's own frame.
     pub strength_ring: Vec4,
     pub photon_ring_color: Vec4,
     pub black_color: Vec4,

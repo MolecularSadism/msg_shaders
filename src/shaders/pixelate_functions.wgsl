@@ -51,6 +51,16 @@ fn art_pixel_size(wpp: f32) -> f32 {
     return max(round(1.0 / wpp), 1.0) * wpp;
 }
 
+// Rotate a 2D vector by `angle` radians (counter-clockwise). Pass a negative
+// angle to map a world-space offset into a frame rotated by `angle`, so a grid
+// snapped on the result aligns to that rotated frame (e.g. a spinning hole's
+// own axes) instead of the world axes.
+fn rotate2d(v: vec2<f32>, angle: f32) -> vec2<f32> {
+    let c = cos(angle);
+    let s = sin(angle);
+    return vec2<f32>(c * v.x - s * v.y, s * v.x + c * v.y);
+}
+
 // Snap a world-space position to the center of a grid cell `cell` world units
 // across. A `cell <= 0` passes the position through unchanged.
 fn pixelate_world(pos: vec2<f32>, cell: f32) -> vec2<f32> {

@@ -547,6 +547,10 @@ fn drive_lensing(
             quantization = Some(q.to_uniforms());
         }
 
+        // Z-rotation of the hole entity, used by the shader to rotate the pixel
+        // grid into the hole's own frame so the pixelation spins with it.
+        let rotation = gt.rotation().to_euler(EulerRot::ZYX).0;
+
         // Larger, stronger lenses win a slot first when the cap is exceeded.
         let influence = hole.size * (hole.lensing_strength.abs() + hole.photon_ring_intensity);
         survivors.push((
@@ -557,7 +561,7 @@ fn drive_lensing(
                     hole.lensing_strength,
                     hole.photon_ring_width,
                     hole.photon_ring_intensity,
-                    0.0,
+                    rotation,
                 ),
                 photon_ring_color: Vec4::from_array(hole.photon_ring_color),
                 black_color: Vec4::from_array(hole.black_color),
