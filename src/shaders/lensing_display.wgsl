@@ -184,19 +184,16 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         return maybe_quantize(vec4<f32>(horizon_color, 1.0), dither_pos);
     }
 
-    // Photon sphere: a hard cutoff replaces the soft glow blend. Below the
-    // cutoff the ring contributes nothing and the lensed scene passes through
-    // untouched — at full fidelity, never palette-quantized. There is no partial
-    // transparency band in between. `alpha_cutoff` is the ring-strength threshold.
+    // The lit scene plus any ring glow. Fragments outside the ring band stop
+    // here, so the palette match below runs only on the ring.
     let ring_mask = clamp(ring_strength, 0.0, 1.0);
-    if ring_mask <= 0.0 || ring_mask < u.quantization.alpha_cutoff {
-        return vec4<f32>(lensed_scene(world), 1.0);
+    let scene = vec4<f32>(lensed_scene(world) + ring_accum, 1.0);
+    if ring_mask <= 0.0 {
+        return scene;
     }
 
-    // Above the cutoff the band is a solid, opaque ring color. Divide out the
-    // Gaussian falloff so it reads as one flat photon-ring color rather than a
-    // glow, then palette-quantize that color. Only the photon sphere is
-    // quantized — the lensed scene below was returned untouched.
-    let ring_color = ring_accum / max(ring_strength, 1e-5);
-    return maybe_quantize(vec4<f32>(ring_color, 1.0), dither_pos);
+    // Photon ring / shadow edge only: palette-quantize with one Bayer threshold
+    // per art-pixel cell, mixed in by the ring mask.
+    let quantized = maybe_quantize(scene, dither_pos);
+    return mix(scene, quantized, ring_mask);
 }

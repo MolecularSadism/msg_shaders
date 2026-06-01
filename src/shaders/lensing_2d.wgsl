@@ -182,26 +182,22 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let clamped_uv = clamp(sample_uv, vec2<f32>(0.0), vec2<f32>(1.0));
     let bg = textureSample(background_tex, background_sampler, clamped_uv).rgb * in_bounds;
 
-    // Lensed background: opaque where the field samples the scene, transparent
-    // where it deflects off-canvas, with a soft outer-rim edge.
+    let col = bg + ring_accum;
+    // Opaque where the field samples the scene, transparent where it deflects
+    // off-canvas, with a soft outer-rim edge. The ring contributes its own alpha
+    // so it stays visible even where the deflected sample lands off-canvas.
     let scene_alpha = in_bounds * coverage;
-    let bg_clamped = clamp(bg, vec3<f32>(0.0), vec3<f32>(1.0));
+    let ring_alpha = clamp(ring_strength, 0.0, 1.0) * coverage;
+    let out_alpha = max(scene_alpha, ring_alpha);
+    let output = vec4<f32>(clamp(col, vec3<f32>(0.0), vec3<f32>(1.0)), out_alpha);
 
-    // Photon sphere: a hard cutoff replaces the soft glow blend. Below the
-    // cutoff the ring contributes nothing and the lensed background passes
-    // through untouched — at full fidelity, never palette-quantized. There is no
-    // partial transparency band in between. `alpha_cutoff` is the ring-strength
-    // threshold.
+    // Quantize only the photon sphere — the ring glow region around the horizon.
+    // The lensed background fills the rest of the screen and passes through at
+    // full fidelity, so the expensive palette match runs on a small fraction of
+    // fragments. `ring_mask` fades the quantized result in over the glow.
     let ring_mask = clamp(ring_strength, 0.0, 1.0);
-    if ring_mask <= 0.0 || ring_mask < quantization.alpha_cutoff {
-        return vec4<f32>(bg_clamped, scene_alpha);
+    if ring_mask <= 0.0 {
+        return output;
     }
-
-    // Above the cutoff the band is a solid, opaque ring color. Divide out the
-    // Gaussian falloff so it reads as one flat photon-ring color rather than a
-    // glow, then palette-quantize that color. Only the photon sphere is
-    // quantized — the lensed background above is returned untouched.
-    let ring_color = ring_accum / max(ring_strength, 1e-5);
-    let quantized = maybe_quantize(vec4<f32>(ring_color, 1.0), dither_pos);
-    return vec4<f32>(quantized.rgb, coverage);
+    return mix(output, maybe_quantize(output, dither_pos), ring_mask);
 }
