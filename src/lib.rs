@@ -15,6 +15,10 @@ use bevy::render::extract_component::ExtractComponent;
 pub use lensing_field::{
     LENSING_FIELD_RES, LensingFieldPlugin, LensingFieldSettings, LensingFieldTextures,
     display::LensingDisplayLabel,
+    sources::{
+        DeflectionShape, DeflectionSource, LightDeflectionRequest, LightDeflector,
+        MAX_DEFLECTION_SOURCES,
+    },
 };
 pub use material::{BlackHoleMaterial, BlackHoleUniforms, LensData, MAX_LENSES};
 
@@ -33,14 +37,17 @@ pub use pixelate::{
 
 pub mod prelude {
     pub use super::{
-        BlackHole, BlackHoleColors, BlackHoleGeometry, BlackHolePlugin, BlackHoleQuantization,
-        ColorQuantizationPlugin, ColorQuantizeMaterial, ColorQuantizeUniforms, DitherPattern,
-        HoleQuantization, LensingHole, LensingHoleCamera, LensingHolePlugin, MAX_PALETTE_COLORS,
-        PixelateConfig, PixelateMaterial, PixelationPlugin, QuantizationConfig,
-        QuantizePixelateMaterial, lens_capture_extent,
+        BlackHole, BlackHoleColors, BlackHoleGeometry, BlackHoleOverlay, BlackHolePlugin,
+        BlackHoleQuantization, ColorQuantizationPlugin, ColorQuantizeMaterial,
+        ColorQuantizeUniforms, DitherPattern, HoleQuantization, LensingHoleCamera,
+        LensingHolePlugin, MAX_PALETTE_COLORS, PixelateConfig, PixelateMaterial, PixelationPlugin,
+        QuantizationConfig, QuantizePixelateMaterial, lens_capture_extent,
     };
     #[cfg(feature = "render_2d")]
-    pub use super::{LENSING_FIELD_RES, LensingFieldPlugin, LensingFieldSettings};
+    pub use super::{
+        DeflectionShape, DeflectionSource, LENSING_FIELD_RES, LensingFieldPlugin,
+        LensingFieldSettings, LightDeflectionRequest, LightDeflector, MAX_DEFLECTION_SOURCES,
+    };
 }
 
 // ============================================================================
@@ -204,7 +211,7 @@ impl Default for BlackHole {
     }
 }
 
-/// Shared color quantization settings used by both `BlackHole` and `LensingHole`.
+/// Shared color quantization settings used by both `BlackHole` and `BlackHoleOverlay`.
 ///
 /// When present, applies retro-style palette quantization with dithering.
 /// The palette colors should be in linear RGB space.
@@ -392,38 +399,48 @@ impl Plugin for LensingHolePlugin {
         app.add_plugins(material::MaterialsPlugin);
         #[cfg(feature = "render_2d")]
         app.add_plugins(LensingFieldPlugin);
-        app.register_type::<LensingHole>();
+        app.register_type::<BlackHoleOverlay>();
         app.register_type::<LensingHoleCamera>();
+        // `drive_lensing` seeds the deflection-source array with the black-hole
+        // `Lens` sources; `pack_deflection_sources` appends the generic shapes
+        // (components + one-shot requests) after it.
+        #[cfg(feature = "render_2d")]
+        app.add_systems(
+            Update,
+            (
+                drive_lensing,
+                lensing_field::sources::pack_deflection_sources,
+            )
+                .chain(),
+        );
+        #[cfg(not(feature = "render_2d"))]
         app.add_systems(Update, drive_lensing);
     }
 }
 
-/// Marker for the orthographic camera the lensing hole projects against.
+/// Marker for the orthographic camera the lensing display renders against.
 ///
-/// Add this to the 2D camera that renders the lens (the one whose view the
-/// player sees). The plugin reads its projection and transform to convert each
-/// `LensingHole` entity's world position into the shader's viewport-space
-/// `hole_center`, so callers only need to move the hole entity.
+/// Add this to the 2D camera whose view the player sees. The deflection field
+/// and the full-screen display pass read its projection and transform to map
+/// world positions into the viewport, so callers only need to place the
+/// black-hole entities in the world.
 #[derive(Component, Debug, Clone, Copy, Reflect, Default, ExtractComponent)]
 #[reflect(Component)]
 pub struct LensingHoleCamera;
 
-/// Gravitational lensing hole that distorts the live scene around a world point.
+/// Visual photon-sphere and event-horizon hole rendered around a world point.
 ///
-/// Renders a Schwarzschild-style lens that distorts a sampled background (the
-/// scene-capture canvas) plus a photon-ring glow and a solid black event horizon
-/// disc. The lens works in world space: the visible halo radius (`size`) and the
-/// world position it distorts around are in world units, and the shader samples
-/// the captured scene by world position. This makes the effect track the
-/// camera's translation, zoom, AND rotation implicitly — the capture canvas is
-/// world-axis-aligned and never rotates.
+/// Draws the photon-ring glow and the solid black event-horizon disc over the
+/// lit scene (the full-screen display pass), in world units around `size`. It
+/// supplies the *appearance* only — the gravitational deflection that warps the
+/// surrounding scene is a separate [`LightDeflector`] (a `Lens` shape) on the
+/// same entity. The effect tracks the camera's translation, zoom, and rotation
+/// implicitly, because the display pass works in world space.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component)]
-pub struct LensingHole {
+pub struct BlackHoleOverlay {
     /// Event-horizon radius as a fraction of the visible halo (`size`).
     pub shadow_radius: f32,
-    /// Deflection strength. Higher = more visible warping at the horizon edge.
-    pub lensing_strength: f32,
     /// Visible halo radius, in world units (0 = invisible). Animated by the CPU.
     pub size: f32,
     /// Gaussian width of the photon ring glow.
@@ -445,11 +462,10 @@ pub struct LensingHole {
     pub canvas_extent: Vec2,
 }
 
-impl Default for LensingHole {
+impl Default for BlackHoleOverlay {
     fn default() -> Self {
         Self {
             shadow_radius: 0.12,
-            lensing_strength: 0.05,
             size: 0.0,
             photon_ring_width: 0.02,
             photon_ring_intensity: 1.2,
@@ -472,24 +488,29 @@ pub fn lens_capture_extent(viewport_world_size: Vec2) -> Vec2 {
     Vec2::splat(viewport_world_size.length())
 }
 
-/// Gathers every visible [`LensingHole`] into the lens array driving the GPU
-/// deflection-field simulation each frame.
+/// Gathers every visible [`BlackHoleOverlay`] into the visual lens array — the
+/// photon-ring / event-horizon discs the display pass draws — and computes the
+/// canvas geometry the field is sampled over.
 ///
-/// The lens is a world-space effect: it reads the [`LensingHoleCamera`]'s
-/// orthographic projection to derive the canvas center (the camera position) and
-/// the square canvas extent (the viewport diagonal, see [`lens_capture_extent`]),
-/// which the field simulation maps its grid over. The full-screen display pass
-/// then samples that field to warp the lit scene; see [`LensingFieldPlugin`].
+/// It reads the [`LensingHoleCamera`]'s orthographic projection to derive the
+/// canvas center (the camera position) and the square canvas extent (the
+/// viewport diagonal, see [`lens_capture_extent`]). The deflection that warps
+/// the scene is gathered separately from [`LightDeflector`] sources by
+/// `pack_deflection_sources`; this only feeds the display pass.
 ///
-/// To keep the per-fragment loop cheap with many lenses, the active set is culled
-/// on the CPU: lenses with negligible size are dropped, and those whose halo AABB
-/// does not intersect the canvas square are frustum-culled. Survivors are sorted
-/// by influence and capped to [`MAX_LENSES`], then written into
+/// To keep the per-fragment loop cheap with many overlays, the active set is
+/// culled on the CPU: overlays with negligible size are dropped, and those whose
+/// halo AABB does not intersect the canvas square are frustum-culled. Survivors
+/// are sorted by influence and capped to [`MAX_LENSES`], then written into
 /// `LensingFieldExtractSource` for extraction to the render world.
 #[cfg(feature = "render_2d")]
 fn drive_lensing(
     q_camera: Query<(&Projection, &GlobalTransform), With<LensingHoleCamera>>,
-    q_holes: Query<(&LensingHole, &GlobalTransform, Option<&HoleQuantization>)>,
+    q_holes: Query<(
+        &BlackHoleOverlay,
+        &GlobalTransform,
+        Option<&HoleQuantization>,
+    )>,
     field_textures: Option<Res<lensing_field::LensingFieldTextures>>,
     field_settings: Option<Res<lensing_field::LensingFieldSettings>>,
     mut field_source: Option<ResMut<lensing_field::extract::LensingFieldExtractSource>>,
@@ -537,14 +558,16 @@ fn drive_lensing(
         // grid into the hole's own frame so the pixelation spins with it.
         let rotation = gt.rotation().to_euler(EulerRot::ZYX).0;
 
-        // Larger, stronger lenses win a slot first when the cap is exceeded.
-        let influence = hole.size * (hole.lensing_strength.abs() + hole.photon_ring_intensity);
+        // Larger, brighter holes win a slot first when the cap is exceeded.
+        let influence = hole.size * hole.photon_ring_intensity;
         survivors.push((
             influence,
             LensData {
                 center_size_shadow: Vec4::new(center.x, center.y, hole.size, hole.shadow_radius),
+                // `strength_ring.x` (deflection) is unused by the display shader;
+                // the deflection comes from the entity's `LightDeflector`.
                 strength_ring: Vec4::new(
-                    hole.lensing_strength,
+                    0.0,
                     hole.photon_ring_width,
                     hole.photon_ring_intensity,
                     rotation,
@@ -562,8 +585,9 @@ fn drive_lensing(
 
     let survivor_lens_data: Vec<LensData> = survivors.into_iter().map(|(_, d)| d).collect();
 
-    // Feed the lens array, canvas geometry, and ring palette into the GPU fluid
-    // simulation's extract source.
+    // Feed the visual lens array, canvas geometry, and ring palette into the
+    // extract source for the display pass. The deflection field itself is driven
+    // separately from `LightDeflector` sources by `pack_deflection_sources`.
     if let Some(ref mut source) = field_source {
         lensing_field::extract::update_lensing_field_source(
             source,

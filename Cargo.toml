@@ -24,5 +24,9 @@ bevy = { workspace = true, default-features = false, features = [
 ] }
 bevy_post_process_2d = { workspace = true }
 
+[dev-dependencies]
+# Offline validation of the pure-WGSL compute shaders (no GPU required).
+naga = { version = "27", features = ["wgsl-in"] }
+
 [lints]
 workspace = true

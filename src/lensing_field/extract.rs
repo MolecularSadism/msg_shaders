@@ -11,16 +11,29 @@ use bevy::{
 
 use crate::{
     ColorQuantizeUniforms, LensData, MAX_LENSES,
-    lensing_field::{LensingFieldSettings, textures::LensingFieldTextures},
+    lensing_field::{
+        LensingFieldSettings,
+        sources::{DeflectionSource, MAX_DEFLECTION_SOURCES},
+        textures::LensingFieldTextures,
+    },
 };
 
-/// Render-world snapshot of the field settings, lens data, and texture handles,
-/// extracted once per frame from the main world.
+/// Render-world snapshot of the field settings, source data, visual lens data,
+/// and texture handles, extracted once per frame from the main world.
+///
+/// Two parallel data sets ride along: the `sources` array feeds the inject
+/// compute pass (the deflection field); the `lens_*` arrays feed the display
+/// pass (the photon ring / event-horizon disc). The black hole appears in both;
+/// shapes that draw no disc (rings, lines) appear only in `sources`.
 #[derive(Resource, Clone)]
 pub struct ExtractedLensingField {
     pub force_scale: f32,
     pub decay: f32,
     pub dt: f32,
+    /// Shape-tagged deflection sources for the inject pass.
+    pub sources: [DeflectionSource; MAX_DEFLECTION_SOURCES],
+    /// Number of populated entries in `sources`.
+    pub source_count: u32,
     pub lens_center_size_shadow: [Vec4; MAX_LENSES],
     pub lens_strength_ring: [Vec4; MAX_LENSES],
     pub lens_photon_ring_color: [Vec4; MAX_LENSES],
@@ -31,6 +44,7 @@ pub struct ExtractedLensingField {
     pub ring_quantization: ColorQuantizeUniforms,
     pub velocity_read: Handle<Image>,
     pub velocity_write: Handle<Image>,
+    /// Number of populated entries in the visual `lens_*` arrays.
     pub lens_count: u32,
 }
 
@@ -40,6 +54,8 @@ impl Default for ExtractedLensingField {
             force_scale: 1.0,
             decay: 0.0,
             dt: 0.016,
+            sources: [DeflectionSource::default(); MAX_DEFLECTION_SOURCES],
+            source_count: 0,
             lens_center_size_shadow: [Vec4::ZERO; MAX_LENSES],
             lens_strength_ring: [Vec4::ZERO; MAX_LENSES],
             lens_photon_ring_color: [Vec4::ZERO; MAX_LENSES],
@@ -62,6 +78,11 @@ impl Default for ExtractedLensingField {
 pub struct LensingFieldExtractSource {
     pub settings: LensingFieldSettings,
     pub textures: Option<LensingFieldTextures>,
+    /// Shape-tagged deflection sources for the inject pass. Filled by
+    /// `drive_lensing` (black-hole `Lens` sources) then `pack_deflection_sources`
+    /// (generic shapes).
+    pub sources: [DeflectionSource; MAX_DEFLECTION_SOURCES],
+    pub source_count: u32,
     pub lens_count: u32,
     pub lens_center_size_shadow: [Vec4; MAX_LENSES],
     pub lens_strength_ring: [Vec4; MAX_LENSES],
@@ -76,6 +97,8 @@ impl Default for LensingFieldExtractSource {
         Self {
             settings: LensingFieldSettings::default(),
             textures: None,
+            sources: [DeflectionSource::default(); MAX_DEFLECTION_SOURCES],
+            source_count: 0,
             lens_count: 0,
             lens_center_size_shadow: [Vec4::ZERO; MAX_LENSES],
             lens_strength_ring: [Vec4::ZERO; MAX_LENSES],
@@ -84,6 +107,24 @@ impl Default for LensingFieldExtractSource {
             canvas_center_extent: Vec4::new(0.0, 0.0, 1.0, 1.0),
             ring_quantization: ColorQuantizeUniforms::default(),
         }
+    }
+}
+
+impl LensingFieldExtractSource {
+    /// Overwrites the deflection-source array with `sources`, capping at
+    /// [`MAX_DEFLECTION_SOURCES`] and `warn!`-ing on any drop so a full array
+    /// never silently reads as complete coverage.
+    pub fn set_sources(&mut self, sources: &[DeflectionSource]) {
+        let count = sources.len().min(MAX_DEFLECTION_SOURCES);
+        if sources.len() > MAX_DEFLECTION_SOURCES {
+            warn!(
+                "deflection source array full ({MAX_DEFLECTION_SOURCES}); dropped {} source(s)",
+                sources.len() - MAX_DEFLECTION_SOURCES
+            );
+        }
+        self.sources = [DeflectionSource::default(); MAX_DEFLECTION_SOURCES];
+        self.sources[..count].copy_from_slice(&sources[..count]);
+        self.source_count = count as u32;
     }
 }
 
@@ -124,6 +165,7 @@ fn rebuild_extracted_lensing_field(
 ) {
     let Some(ref textures) = source.textures else {
         extracted.lens_count = 0;
+        extracted.source_count = 0;
         return;
     };
 
@@ -131,6 +173,8 @@ fn rebuild_extracted_lensing_field(
         force_scale: source.settings.force_scale,
         decay: source.settings.decay,
         dt: source.settings.dt,
+        sources: source.sources,
+        source_count: source.source_count,
         lens_center_size_shadow: source.lens_center_size_shadow,
         lens_strength_ring: source.lens_strength_ring,
         lens_photon_ring_color: source.lens_photon_ring_color,

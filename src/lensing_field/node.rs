@@ -49,7 +49,7 @@ pub(crate) fn prepare_lensing_field_bind_groups(
     render_device: Res<RenderDevice>,
     pipeline_cache: Res<PipelineCache>,
 ) {
-    if extracted.lens_count == 0 {
+    if extracted.source_count == 0 {
         *bind_groups = LensingFieldBindGroups::default();
         return;
     }
@@ -100,7 +100,7 @@ impl ViewNode for LensingFieldNode {
         world: &'w World,
     ) -> Result<(), NodeRunError> {
         let extracted = world.resource::<ExtractedLensingField>();
-        if extracted.lens_count == 0 {
+        if extracted.source_count == 0 {
             return Ok(());
         }
 

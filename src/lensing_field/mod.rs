@@ -15,6 +15,7 @@ pub(crate) mod display;
 pub(crate) mod extract;
 pub(crate) mod node;
 pub(crate) mod pipelines;
+pub mod sources;
 pub(crate) mod textures;
 
 pub use textures::LensingFieldTextures;
@@ -67,6 +68,9 @@ impl Plugin for LensingFieldPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<LensingFieldSettings>();
         app.init_resource::<LensingFieldSettings>();
+        app.register_type::<sources::LightDeflector>();
+        app.register_type::<sources::DeflectionShape>();
+        app.add_message::<sources::LightDeflectionRequest>();
         app.add_plugins((
             LensingFieldExtractPlugin,
             LensingFieldNodePlugin,

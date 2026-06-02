@@ -19,20 +19,20 @@ use bevy::render::renderer::{RenderDevice, RenderQueue};
 use bevy::render::{Render, RenderApp, RenderSystems};
 
 use crate::lensing_field::extract::ExtractedLensingField;
+use crate::lensing_field::sources::{DeflectionSource, MAX_DEFLECTION_SOURCES};
 
 // ── Uniform sent to every lensing-field compute pass ─────────────────────────
 
 /// Mirrors `LensingFieldUniform` in the compute shaders.
 #[derive(ShaderType, Clone, Copy)]
 pub(crate) struct LensingFieldUniform {
-    pub lens_center_size_shadow: [Vec4; crate::MAX_LENSES],
-    pub lens_strength_ring: [Vec4; crate::MAX_LENSES],
+    pub sources: [DeflectionSource; MAX_DEFLECTION_SOURCES],
     /// Canvas center (xy) and extent (zw) in world space.
     pub canvas_center_extent: Vec4,
-    pub lens_count: u32,
+    pub source_count: u32,
     /// Per-frame velocity decay multiplier applied during inject.
     pub decay: f32,
-    /// Schwarzschild force scale.
+    /// Force injection scale.
     pub force_scale: f32,
     /// Advection time step.
     pub dt: f32,
@@ -41,10 +41,9 @@ pub(crate) struct LensingFieldUniform {
 impl Default for LensingFieldUniform {
     fn default() -> Self {
         Self {
-            lens_center_size_shadow: [Vec4::ZERO; crate::MAX_LENSES],
-            lens_strength_ring: [Vec4::ZERO; crate::MAX_LENSES],
+            sources: [DeflectionSource::default(); MAX_DEFLECTION_SOURCES],
             canvas_center_extent: Vec4::new(0.0, 0.0, 1.0, 1.0),
-            lens_count: 0,
+            source_count: 0,
             decay: 0.0,
             force_scale: 1.0,
             dt: 0.016,
@@ -133,10 +132,9 @@ pub(crate) fn prepare_lensing_field_uniforms(
     render_queue: Res<RenderQueue>,
 ) {
     let uniform = LensingFieldUniform {
-        lens_center_size_shadow: extracted.lens_center_size_shadow,
-        lens_strength_ring: extracted.lens_strength_ring,
+        sources: extracted.sources,
         canvas_center_extent: extracted.canvas_center_extent,
-        lens_count: extracted.lens_count,
+        source_count: extracted.source_count,
         decay: extracted.decay,
         force_scale: extracted.force_scale,
         dt: extracted.dt,

@@ -191,9 +191,12 @@ impl ViewNode for LensingDisplayNode {
         world: &'w World,
     ) -> Result<(), NodeRunError> {
         let extracted = world.resource::<ExtractedLensingField>();
-        // No lenses: leave the view untouched (the scene passes straight through
-        // to the downstream post-processing stack).
-        if extracted.lens_count == 0 {
+        // No deflection sources: the field is empty, so leave the view untouched
+        // (the scene passes straight through to the downstream post-processing
+        // stack). Sources without a visual lens (rings, lines) still warp here;
+        // they just draw no disc, because the per-lens loop is keyed on the
+        // visual `lens_count`.
+        if extracted.source_count == 0 {
             return Ok(());
         }
 

@@ -168,7 +168,7 @@ impl Default for LensData {
 }
 
 /// Registers the embedded shaders and material plugins used by both
-/// `BlackHole` and `LensingHole`. Safe to add from multiple parent plugins:
+/// `BlackHole` and `BlackHoleOverlay`. Safe to add from multiple parent plugins:
 /// `is_unique` is false and the inner `Material*Plugin` adds are guarded by
 /// `is_plugin_added` checks.
 pub(crate) struct MaterialsPlugin;
