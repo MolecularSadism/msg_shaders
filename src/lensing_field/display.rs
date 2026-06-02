@@ -16,6 +16,7 @@ use bevy::core_pipeline::FullscreenShader;
 use bevy::core_pipeline::core_2d::graph::Node2d;
 use bevy::ecs::query::QueryItem;
 use bevy::prelude::*;
+use bevy::render::camera::ExtractedCamera;
 use bevy::render::extract_component::ExtractComponentPlugin;
 use bevy::render::render_asset::RenderAssets;
 use bevy::render::render_graph::{NodeRunError, RenderGraphContext, RenderLabel, ViewNode};
@@ -28,7 +29,6 @@ use bevy::render::render_resource::{
     ShaderStages, ShaderType, SpecializedRenderPipeline, SpecializedRenderPipelines, TextureFormat,
     TextureSampleType, UniformBuffer,
 };
-use bevy::render::camera::ExtractedCamera;
 use bevy::render::renderer::{RenderContext, RenderDevice, RenderQueue};
 use bevy::render::texture::GpuImage;
 use bevy::render::view::{ExtractedView, ViewTarget};
@@ -112,9 +112,7 @@ fn prepare_lensing_display_uniforms(
             // the viewport's position and extent within the full target so it can
             // correctly map full-target UVs to viewport-relative NDC.
             let vp_rect = match (cam.physical_viewport_size, cam.physical_target_size) {
-                (Some(vp_size), Some(target_size))
-                    if target_size.x > 0 && target_size.y > 0 =>
-                {
+                (Some(vp_size), Some(target_size)) if target_size.x > 0 && target_size.y > 0 => {
                     let origin = cam
                         .viewport
                         .as_ref()
