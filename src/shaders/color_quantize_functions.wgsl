@@ -146,6 +146,76 @@ fn find_nearest_palette_color(
     return best_color;
 }
 
+/// Nearest palette color from a precomputed lookup table.
+///
+/// The LUT bakes the Oklab nearest-palette search over the linear-RGB cube
+/// `[0, 1]^3` (see `ColorQuantizeUniforms::build_lut`). Sampling it with a
+/// nearest, clamp-to-edge sampler replaces the per-pixel `palette_size` loop
+/// with one fetch. The sampler must be non-filtering: linear interpolation would
+/// blend two palette entries into an off-palette color.
+///
+/// Dithering is preserved exactly: the offset is applied to Oklab lightness and
+/// converted back to linear RGB before the lookup, so only the nearest search is
+/// approximated (to the LUT's cell resolution), not the dither.
+fn find_nearest_palette_color_lut(
+    color: vec3<f32>,
+    dither_offset: f32,
+    lut: texture_3d<f32>,
+    lut_sampler: sampler,
+) -> vec3<f32> {
+    let oklab = linear_rgb_to_oklab(color);
+    let dithered_oklab = vec3<f32>(oklab.x + dither_offset * 0.1, oklab.y, oklab.z);
+    let dithered_rgb = oklab_to_linear_rgb(dithered_oklab);
+    let c = clamp(dithered_rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+    return textureSampleLevel(lut, lut_sampler, c, 0.0).rgb;
+}
+
+/// LUT-backed equivalent of `quantize_color`.
+///
+/// Identical transparency / dither / alpha handling; only the per-pixel palette
+/// loop is replaced by a `find_nearest_palette_color_lut` fetch. Pass the same
+/// `palette_size`, `alpha_cutoff`, `transparency_floor`, and `dither_pattern`
+/// the loop version would have used, plus the baked LUT and its nearest sampler.
+fn quantize_color_lut(
+    color: vec4<f32>,
+    screen_pos: vec2<f32>,
+    lut: texture_3d<f32>,
+    lut_sampler: sampler,
+    palette_size: u32,
+    alpha_cutoff: f32,
+    transparency_floor: f32,
+    dither_pattern: u32
+) -> vec4<f32> {
+    let dither_raw = get_dither_threshold_raw(screen_pos, dither_pattern);
+    let dither_color = dither_raw - 0.5;
+
+    let luminance = dot(color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let luminance_weight = 1.0 - color.a;
+    let effective_alpha = mix(color.a, color.a * max(luminance, 0.05), luminance_weight);
+
+    if effective_alpha < alpha_cutoff {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+
+    let alpha_range = 1.0 - alpha_cutoff;
+    let normalized_alpha = (effective_alpha - alpha_cutoff) / alpha_range;
+
+    if normalized_alpha < transparency_floor {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+
+    let floor_range = 1.0 - transparency_floor;
+    let adjusted_alpha = (normalized_alpha - transparency_floor) / floor_range;
+
+    if adjusted_alpha < dither_raw {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+
+    let quantized = find_nearest_palette_color_lut(color.rgb, dither_color, lut, lut_sampler);
+
+    return vec4<f32>(quantized, 1.0);
+}
+
 /// Quantize a color with full transparency dithering support.
 /// Returns vec4(0) for transparent pixels, vec4(quantized_rgb, 1.0) for opaque.
 ///

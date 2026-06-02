@@ -26,13 +26,22 @@
 //! ```
 
 use bevy::{
+    asset::RenderAssetUsages,
     prelude::*,
-    render::render_resource::{AsBindGroup, ShaderType},
+    render::render_resource::{AsBindGroup, Extent3d, ShaderType, TextureDimension, TextureFormat},
     shader::ShaderRef,
     sprite_render::{AlphaMode2d, Material2d, Material2dPlugin},
 };
 
 use crate::quantize::{DitherPattern, MAX_PALETTE_COLORS, linear_rgb_to_oklab};
+
+/// Default per-axis resolution for the palette lookup table.
+///
+/// A multiple of 16 keeps each texel row 256-byte aligned (`16 B/texel`), so the
+/// 3D upload needs no row padding. 64³ holds the whole linear-RGB cube finely
+/// enough that the nearest-palette result is visually indistinguishable from the
+/// per-pixel Oklab search for palettes up to [`MAX_PALETTE_COLORS`].
+pub const PALETTE_LUT_RESOLUTION: u32 = 64;
 
 /// Configuration for color quantization.
 #[derive(Clone)]
@@ -134,6 +143,65 @@ impl ColorQuantizeUniforms {
             }
         }
         best
+    }
+
+    /// Stable hash of the active palette, used to skip rebuilding the LUT when
+    /// the palette is unchanged. Only the matched colors and their count feed
+    /// the lookup table, so dithering / alpha settings are deliberately excluded.
+    #[must_use]
+    pub fn palette_key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.palette_size.hash(&mut hasher);
+        for color in self.palette.iter().take(self.palette_size as usize) {
+            color.x.to_bits().hash(&mut hasher);
+            color.y.to_bits().hash(&mut hasher);
+            color.z.to_bits().hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    /// Bakes the nearest-palette match over the linear-RGB cube into a 3D image.
+    ///
+    /// Each texel stores the palette color closest (in Oklab) to the linear RGB
+    /// at its cell center, so a shader can replace the per-pixel palette loop
+    /// with a single nearest-sampled fetch. The texture is `Rgba32Float` and
+    /// must be sampled with a nearest (non-filtering) sampler — interpolation
+    /// would blend two palette entries into an off-palette color.
+    ///
+    /// Inputs are clamped to `[0, 1]` by the sampler's clamp-to-edge addressing;
+    /// HDR colors above the palette range resolve to the brightest palette entry,
+    /// matching the per-pixel search whose palette is itself in `[0, 1]`.
+    #[must_use]
+    pub fn build_lut(&self, resolution: u32) -> Image {
+        let n = resolution.max(1);
+        let inv = 1.0 / n as f32;
+        let mut data = Vec::with_capacity((n * n * n) as usize * 16);
+        for z in 0..n {
+            let b = (z as f32 + 0.5) * inv;
+            for y in 0..n {
+                let g = (y as f32 + 0.5) * inv;
+                for x in 0..n {
+                    let r = (x as f32 + 0.5) * inv;
+                    let c = self.nearest_palette_color(Vec3::new(r, g, b));
+                    data.extend_from_slice(&c.x.to_le_bytes());
+                    data.extend_from_slice(&c.y.to_le_bytes());
+                    data.extend_from_slice(&c.z.to_le_bytes());
+                    data.extend_from_slice(&1.0f32.to_le_bytes());
+                }
+            }
+        }
+        Image::new(
+            Extent3d {
+                width: n,
+                height: n,
+                depth_or_array_layers: n,
+            },
+            TextureDimension::D3,
+            data,
+            TextureFormat::Rgba32Float,
+            RenderAssetUsages::RENDER_WORLD,
+        )
     }
 }
 

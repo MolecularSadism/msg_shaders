@@ -514,6 +514,10 @@ fn drive_lensing(
     field_textures: Option<Res<lensing_field::LensingFieldTextures>>,
     field_settings: Option<Res<lensing_field::LensingFieldSettings>>,
     mut field_source: Option<ResMut<lensing_field::extract::LensingFieldExtractSource>>,
+    mut images: ResMut<Assets<Image>>,
+    // Cached (palette key, LUT handle). The strong handle keeps the baked image
+    // alive; it is rebuilt only when the ring palette changes.
+    mut lut_cache: Local<Option<(u64, Handle<Image>)>>,
 ) {
     let Ok((Projection::Orthographic(ortho), camera_gt)) = q_camera.single() else {
         return;
@@ -589,6 +593,26 @@ fn drive_lensing(
     // extract source for the display pass. The deflection field itself is driven
     // separately from `LightDeflector` sources by `pack_deflection_sources`.
     if let Some(ref mut source) = field_source {
+        let quant = quantization.unwrap_or_default();
+
+        // Rebuild the baked nearest-palette LUT only when the palette changes.
+        // An empty palette is never sampled (the display shader guards on
+        // `palette_size == 0`), so a tiny placeholder avoids baking the full cube.
+        let key = quant.palette_key();
+        let lut_handle = match lut_cache.as_ref() {
+            Some((cached_key, handle)) if *cached_key == key => handle.clone(),
+            _ => {
+                let resolution = if quant.palette_size == 0 {
+                    2
+                } else {
+                    quantize_material::PALETTE_LUT_RESOLUTION
+                };
+                let handle = images.add(quant.build_lut(resolution));
+                *lut_cache = Some((key, handle.clone()));
+                handle
+            }
+        };
+
         lensing_field::extract::update_lensing_field_source(
             source,
             field_settings
@@ -598,7 +622,8 @@ fn drive_lensing(
             &survivor_lens_data,
             canvas_center,
             canvas_extent,
-            quantization.unwrap_or_default(),
+            quant,
+            lut_handle,
         );
     }
 }

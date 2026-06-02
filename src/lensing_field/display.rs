@@ -20,7 +20,9 @@ use bevy::render::camera::ExtractedCamera;
 use bevy::render::extract_component::ExtractComponentPlugin;
 use bevy::render::render_asset::RenderAssets;
 use bevy::render::render_graph::{NodeRunError, RenderGraphContext, RenderLabel, ViewNode};
-use bevy::render::render_resource::binding_types::{sampler, texture_2d, uniform_buffer};
+use bevy::render::render_resource::binding_types::{
+    sampler, texture_2d, texture_3d, uniform_buffer,
+};
 use bevy::render::render_resource::{
     BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, CachedPipelineState,
     CachedRenderPipelineId, ColorTargetState, ColorWrites, FilterMode, FragmentState,
@@ -219,6 +221,12 @@ impl ViewNode for LensingDisplayNode {
         let Some(field) = gpu_images.get(&extracted.velocity_write) else {
             return Ok(());
         };
+        // Baked palette LUT for the ring-band quantization. Missing only on the
+        // first frame before the image uploads; skip the pass until it's ready
+        // rather than binding a mismatched texture.
+        let Some(lut) = gpu_images.get(&extracted.ring_quantization_lut) else {
+            return Ok(());
+        };
 
         let uniforms = world.resource::<LensingDisplayUniforms>();
         let Some(uniform_binding) = uniforms.buffer.binding() else {
@@ -236,6 +244,8 @@ impl ViewNode for LensingDisplayNode {
                 &field.texture_view,
                 &pipeline.field_sampler,
                 uniform_binding,
+                &lut.texture_view,
+                &pipeline.lut_sampler,
             )),
         );
 
@@ -269,6 +279,7 @@ struct LensingDisplayPipeline {
     layout: BindGroupLayoutDescriptor,
     scene_sampler: Sampler,
     field_sampler: Sampler,
+    lut_sampler: Sampler,
     shader: Handle<Shader>,
     fullscreen_shader: FullscreenShader,
 }
@@ -289,6 +300,10 @@ impl FromWorld for LensingDisplayPipeline {
                     texture_2d(TextureSampleType::Float { filterable: true }),
                     sampler(SamplerBindingType::Filtering),
                     uniform_buffer::<LensingDisplayUniform>(false),
+                    // Baked nearest-palette LUT (Rgba32Float, unfilterable) and
+                    // its nearest sampler.
+                    texture_3d(TextureSampleType::Float { filterable: false }),
+                    sampler(SamplerBindingType::NonFiltering),
                 ),
             ),
         );
@@ -305,6 +320,14 @@ impl FromWorld for LensingDisplayPipeline {
         };
         let scene_sampler = make_sampler("lensing_display_scene_sampler");
         let field_sampler = make_sampler("lensing_display_field_sampler");
+        // Nearest + clamp-to-edge: the palette LUT must return an exact palette
+        // entry (no interpolation), and out-of-range colors clamp to the cube edge.
+        let lut_sampler = render_device.create_sampler(&SamplerDescriptor {
+            label: Some("lensing_display_lut_sampler"),
+            mag_filter: FilterMode::Nearest,
+            min_filter: FilterMode::Nearest,
+            ..Default::default()
+        });
 
         let shader = world.load_asset(DISPLAY_SHADER);
         let fullscreen_shader = FullscreenShader::from_world(world);
@@ -313,6 +336,7 @@ impl FromWorld for LensingDisplayPipeline {
             layout,
             scene_sampler,
             field_sampler,
+            lut_sampler,
             shader,
             fullscreen_shader,
         }

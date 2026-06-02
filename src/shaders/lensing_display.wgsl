@@ -60,6 +60,11 @@ struct LensingDisplay {
 @group(0) @binding(2) var velocity_field_tex: texture_2d<f32>;
 @group(0) @binding(3) var velocity_field_sampler: sampler;
 @group(0) @binding(4) var<uniform> u: LensingDisplay;
+// Palette lookup table: nearest palette color baked over the linear-RGB cube,
+// sampled with a nearest (non-filtering) sampler in place of the per-pixel
+// Oklab palette loop. Unused when `quantization.palette_size == 0`.
+@group(0) @binding(5) var palette_lut: texture_3d<f32>;
+@group(0) @binding(6) var palette_lut_sampler: sampler;
 
 // Map a world position to the field's canvas UV. The canvas is a square,
 // world-axis-aligned region centered on `canvas_center_extent.xy`; V is flipped
@@ -107,18 +112,19 @@ fn lensed_scene(world: vec2<f32>) -> vec3<f32> {
     return textureSampleLevel(scene_tex, scene_sampler, sample_uv, 0.0).rgb;
 }
 
-// Palette-quantize a color; pass-through when no palette is configured.
+// Palette-quantize a color; pass-through when no palette is configured. The
+// nearest-palette match comes from the baked LUT (`palette_lut`) instead of a
+// per-pixel loop, so the photon-ring band no longer pays a `palette_size`-long
+// Oklab search per fragment when the hole grows to near-full coverage.
 fn maybe_quantize(color: vec4<f32>, dither_pos: vec2<f32>) -> vec4<f32> {
     if u.quantization.palette_size == 0u {
         return color;
     }
-    var palette = u.quantization.palette;
-    var palette_oklab = u.quantization.palette_oklab;
-    return cq::quantize_color(
+    return cq::quantize_color_lut(
         color,
         dither_pos,
-        &palette,
-        &palette_oklab,
+        palette_lut,
+        palette_lut_sampler,
         u.quantization.palette_size,
         u.quantization.alpha_cutoff,
         u.quantization.transparency_floor,
