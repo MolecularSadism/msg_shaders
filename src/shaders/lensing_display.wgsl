@@ -61,10 +61,9 @@ struct LensingDisplay {
 @group(0) @binding(3) var velocity_field_sampler: sampler;
 @group(0) @binding(4) var<uniform> u: LensingDisplay;
 // Palette lookup table: nearest palette color baked over the linear-RGB cube,
-// sampled with a nearest (non-filtering) sampler in place of the per-pixel
-// Oklab palette loop. Unused when `quantization.palette_size == 0`.
+// point-loaded (no sampler) in place of the per-pixel Oklab palette loop.
+// Unused when `quantization.palette_size == 0`.
 @group(0) @binding(5) var palette_lut: texture_3d<f32>;
-@group(0) @binding(6) var palette_lut_sampler: sampler;
 
 // Map a world position to the field's canvas UV. The canvas is a square,
 // world-axis-aligned region centered on `canvas_center_extent.xy`; V is flipped
@@ -124,7 +123,6 @@ fn maybe_quantize(color: vec4<f32>, dither_pos: vec2<f32>) -> vec4<f32> {
         color,
         dither_pos,
         palette_lut,
-        palette_lut_sampler,
         u.quantization.palette_size,
         u.quantization.alpha_cutoff,
         u.quantization.transparency_floor,

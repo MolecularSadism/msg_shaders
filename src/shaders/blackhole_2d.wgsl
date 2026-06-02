@@ -69,6 +69,11 @@ var<uniform> material: BlackHoleMaterial;
 @group(2) @binding(1)
 var<uniform> quantization: QuantizationSettings;
 
+// Baked nearest-palette LUT (Rgba32Float). Point-loaded (no sampler) to replace
+// the per-pixel Oklab palette loop with one fetch at each quantization site.
+@group(2) @binding(2)
+var palette_lut: texture_3d<f32>;
+
 // ----------------------------------------------------------------------------
 // MATHEMATICAL CONSTANTS
 // ----------------------------------------------------------------------------
@@ -524,9 +529,6 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             // QUANTIZATION PATH: Quantize each disc layer SEPARATELY - NO pre-blending at all
             // Each layer quantizes independently, then composite quantized results
 
-            var palette = quantization.palette;
-            var palette_oklab = quantization.palette_oklab;
-
             // Pre-multiply Doppler so we can test transparency without the
             // full palette search. `quantize_color`'s `effective_alpha` is
             // bounded above by the input alpha (the luminance-weighted mix
@@ -540,11 +542,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
                 let disc_input_alpha = disc_alpha * h_doppler_main.a;
                 if disc_input_alpha >= quantization.alpha_cutoff {
                     let main_with_doppler = vec4<f32>(disc_color * h_doppler_main.rgb, disc_input_alpha);
-                    quantized_disc = cq::quantize_color(
+                    quantized_disc = cq::quantize_color_lut(
                         main_with_doppler,
                         screen_pos,
-                        &palette,
-                        &palette_oklab,
+                        palette_lut,
                         quantization.palette_size,
                         quantization.alpha_cutoff,
                         quantization.transparency_floor,
@@ -556,11 +557,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             // If disc is present (alpha above cutoff), show disc. Otherwise show black.
             // No mixing - disc continues as if shadow wasn't there.
             if quantized_disc.a <= quantization.alpha_cutoff {
-                let quantized_black = cq::quantize_color(
+                let quantized_black = cq::quantize_color_lut(
                     vec4<f32>(material.black_color.rgb, 1.0),
                     screen_pos,
-                    &palette,
-                    &palette_oklab,
+                    palette_lut,
                     quantization.palette_size,
                     quantization.alpha_cutoff,
                     quantization.transparency_floor,
@@ -650,14 +650,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // Note: shadow area (screen_r < shadow_r) is handled earlier with early return.
     if quantization.palette_size > 0u {
         let screen_pos = in.position.xy;
-        var palette = quantization.palette;
-        var palette_oklab = quantization.palette_oklab;
 
-        return cq::quantize_color(
+        return cq::quantize_color_lut(
             output,
             screen_pos,
-            &palette,
-            &palette_oklab,
+            palette_lut,
             quantization.palette_size,
             quantization.alpha_cutoff,
             quantization.transparency_floor,

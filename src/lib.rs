@@ -288,6 +288,7 @@ fn spawn_blackhole_meshes(
     mut commands: Commands,
     mut materials: ResMut<Assets<BlackHoleMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut images: ResMut<Assets<Image>>,
     quad_mesh: Option<Res<HoleQuadMesh>>,
     query: Query<
         (Entity, &BlackHole, &Transform, Option<&HoleQuantization>),
@@ -327,9 +328,21 @@ fn spawn_blackhole_meshes(
 
         let quantization_uniforms = quantization.map(|q| q.to_uniforms()).unwrap_or_default();
 
+        // Bake the nearest-palette LUT so the shader's three quantization sites
+        // each replace a per-pixel Oklab palette loop with a single fetch. An
+        // empty palette is never sampled (the shader guards on `palette_size`),
+        // so a tiny placeholder keeps the binding valid without baking the cube.
+        let lut_resolution = if quantization_uniforms.palette_size == 0 {
+            2
+        } else {
+            quantize_material::PALETTE_LUT_RESOLUTION
+        };
+        let palette_lut = images.add(quantization_uniforms.build_lut(lut_resolution));
+
         let material = materials.add(BlackHoleMaterial {
             uniforms,
             quantization: quantization_uniforms,
+            palette_lut,
         });
 
         #[cfg(feature = "render_3d")]

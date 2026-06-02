@@ -20,6 +20,12 @@ pub struct BlackHoleMaterial {
     pub uniforms: BlackHoleUniforms,
     #[uniform(1)]
     pub quantization: ColorQuantizeUniforms,
+    /// Baked nearest-palette lookup table for `quantization`. The fragment
+    /// shader `textureLoad`s this (no sampler) instead of running the per-pixel
+    /// Oklab palette loop. Built once when the material is created (see
+    /// `spawn_blackhole_meshes`).
+    #[texture(2, dimension = "3d", sample_type = "float", filterable = false)]
+    pub palette_lut: Handle<Image>,
 }
 
 /// Shader uniforms - 16-byte aligned for GPU compatibility.

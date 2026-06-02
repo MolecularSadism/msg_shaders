@@ -149,10 +149,10 @@ fn find_nearest_palette_color(
 /// Nearest palette color from a precomputed lookup table.
 ///
 /// The LUT bakes the Oklab nearest-palette search over the linear-RGB cube
-/// `[0, 1]^3` (see `ColorQuantizeUniforms::build_lut`). Sampling it with a
-/// nearest, clamp-to-edge sampler replaces the per-pixel `palette_size` loop
-/// with one fetch. The sampler must be non-filtering: linear interpolation would
-/// blend two palette entries into an off-palette color.
+/// `[0, 1]^3` (see `ColorQuantizeUniforms::build_lut`). A direct `textureLoad`
+/// of the cell containing the color replaces the per-pixel `palette_size` loop
+/// with one fetch — no sampler, so the unfilterable `Rgba32Float` LUT needs no
+/// filtering-sampler binding and the read is always the exact stored entry.
 ///
 /// Dithering is preserved exactly: the offset is applied to Oklab lightness and
 /// converted back to linear RGB before the lookup, so only the nearest search is
@@ -161,13 +161,17 @@ fn find_nearest_palette_color_lut(
     color: vec3<f32>,
     dither_offset: f32,
     lut: texture_3d<f32>,
-    lut_sampler: sampler,
 ) -> vec3<f32> {
     let oklab = linear_rgb_to_oklab(color);
     let dithered_oklab = vec3<f32>(oklab.x + dither_offset * 0.1, oklab.y, oklab.z);
     let dithered_rgb = oklab_to_linear_rgb(dithered_oklab);
-    let c = clamp(dithered_rgb, vec3<f32>(0.0), vec3<f32>(1.0));
-    return textureSampleLevel(lut, lut_sampler, c, 0.0).rgb;
+
+    // Integer index of the cell containing the (clamped) color. `floor(c * dims)`
+    // maps [0,1] onto [0, dims], clamped to the last cell so c == 1 stays in range.
+    let dims = vec3<f32>(textureDimensions(lut));
+    let cf = clamp(dithered_rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+    let coord = vec3<i32>(clamp(floor(cf * dims), vec3<f32>(0.0), dims - vec3<f32>(1.0)));
+    return textureLoad(lut, coord, 0).rgb;
 }
 
 /// LUT-backed equivalent of `quantize_color`.
@@ -180,7 +184,6 @@ fn quantize_color_lut(
     color: vec4<f32>,
     screen_pos: vec2<f32>,
     lut: texture_3d<f32>,
-    lut_sampler: sampler,
     palette_size: u32,
     alpha_cutoff: f32,
     transparency_floor: f32,
@@ -211,7 +214,7 @@ fn quantize_color_lut(
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 
-    let quantized = find_nearest_palette_color_lut(color.rgb, dither_color, lut, lut_sampler);
+    let quantized = find_nearest_palette_color_lut(color.rgb, dither_color, lut);
 
     return vec4<f32>(quantized, 1.0);
 }
