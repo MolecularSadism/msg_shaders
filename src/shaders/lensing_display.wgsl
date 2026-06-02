@@ -96,29 +96,14 @@ fn uv_from_world(world: vec2<f32>) -> vec2<f32> {
 }
 
 // Lit scene at a world position: deflect by the field, project the deflected
-// world position back to screen, sample the view target. As the deflected
-// sample approaches the viewport edge the deflection is faded out over a small
-// band, so a sample that would otherwise leave the screen relaxes back to the
-// fragment's own undeflected pixel. This keeps the clamp-to-edge sampler from
-// smearing the lone border texel into lines when the lens sits off-screen.
-// `textureSampleLevel` keeps the read in per-fragment control flow
-// (implicit-derivative sampling demands uniformity).
+// world position back to screen, sample the view target. The deflected sample
+// is never culled for landing off-screen — the clamp-to-edge sampler reads the
+// border texel, so a strongly-deflected fragment pulls in the screen edge
+// rather than collapsing to black. `textureSampleLevel` keeps the read in
+// per-fragment control flow (implicit-derivative sampling demands uniformity).
 fn lensed_scene(world: vec2<f32>) -> vec3<f32> {
     let deflect = textureSample(velocity_field_tex, velocity_field_sampler, canvas_uv(world)).rg;
-    let deflected_uv = uv_from_world(world - deflect);
-
-    // Viewport bounds in full-target UV.
-    let vp_min = u.viewport_rect.xy;
-    let vp_max = u.viewport_rect.xy + u.viewport_rect.zw;
-
-    // How far the deflected sample lands past the viewport, as a fraction of a
-    // small fade band on each axis: 0 inside, 1 once a full band beyond the edge.
-    let band = max(u.viewport_rect.zw * 0.05, vec2<f32>(1e-5));
-    let over = max(vp_min - deflected_uv, deflected_uv - vp_max) / band;
-    let fade = clamp(max(over.x, over.y), 0.0, 1.0);
-
-    // Relax toward the undeflected pixel as the sample exits the frame.
-    let sample_uv = mix(deflected_uv, uv_from_world(world), fade);
+    let sample_uv = uv_from_world(world - deflect);
     return textureSampleLevel(scene_tex, scene_sampler, sample_uv, 0.0).rgb;
 }
 
