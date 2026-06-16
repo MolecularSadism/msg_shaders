@@ -165,20 +165,28 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
             continue;
         }
 
-        // Snapped radius: pixelate the offset in the hole's own rotated frame.
-        // Rotating the centered offset by -angle aligns the block grid to (and
-        // spins it with) the hole's rotation; the grid rides with the hole and
-        // stays smooth under motion. A whole art-pixel cell shares one radius,
-        // stepping the horizon disc and ring band in pixel blocks, not smooth
+        // Snap the centered offset to the art-pixel grid in the hole's own
+        // rotated frame. Rotating by -angle aligns the block grid to (and spins
+        // it with) the hole's rotation; the grid rides with the hole and stays
+        // smooth under motion. A whole art-pixel cell shares one snapped offset,
+        // so the horizon disc and ring band step in pixel blocks, not smooth
         // circles.
-        let r = length(px::pixelate_world(px::rotate2d(centered, -angle), cell)) / size;
+        let snapped = px::pixelate_world(px::rotate2d(centered, -angle), cell);
+        let r = length(snapped) / size; // ring band, measured from the cell center
 
-        // EVENT HORIZON: solid black inside rs (any lens wins). Tested against
-        // both the snapped radius (so the disc edge steps in pixel blocks) and
-        // the smooth radius (so the geometric interior is always covered). The
-        // block snapping can then only push the black outward, never expose the
-        // strongly-deflected scene inside the shadow as a lensed speckle.
-        if r < rs || r_raw < rs {
+        // EVENT HORIZON: solid black wherever the shadow circle reaches into an
+        // art-pixel cell (any lens wins). The test measures the cell's nearest
+        // point to the hole center, so a cell turns black the moment the circle
+        // touches it. This keeps the disc edge stepping in whole pixel blocks at
+        // every size — including the small end of the size pulse, where a
+        // smooth-circle test would round the few-pixel shadow off — while still
+        // covering the entire geometric interior (every fragment inside the
+        // circle lies in a touched cell), so snapping can only push the black
+        // outward, never expose the deflected scene inside the shadow as a
+        // lensed speckle.
+        let cell_nearest = max(abs(snapped) - vec2<f32>(cell * 0.5), vec2<f32>(0.0));
+        let in_horizon = length(cell_nearest) < rs * size;
+        if in_horizon {
             horizon = true;
             horizon_color = lens.black_color.rgb;
         }
@@ -191,7 +199,7 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         ring_strength = max(ring_strength, ring_i);
 
         // Horizon dominates; otherwise the strongest ring owns the fragment's center.
-        let weight = select(ring_i, 1e9, r < rs);
+        let weight = select(ring_i, 1e9, in_horizon);
         if weight > active_weight {
             active_weight = weight;
             active_center = center;
