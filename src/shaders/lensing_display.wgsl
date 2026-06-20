@@ -174,18 +174,18 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         let snapped = px::pixelate_world(px::rotate2d(centered, -angle), cell);
         let r = length(snapped) / size; // ring band, measured from the cell center
 
-        // EVENT HORIZON: solid black wherever the shadow circle reaches into an
-        // art-pixel cell (any lens wins). The test measures the cell's nearest
-        // point to the hole center, so a cell turns black the moment the circle
-        // touches it. This keeps the disc edge stepping in whole pixel blocks at
-        // every size — including the small end of the size pulse, where a
-        // smooth-circle test would round the few-pixel shadow off — while still
-        // covering the entire geometric interior (every fragment inside the
-        // circle lies in a touched cell), so snapping can only push the black
-        // outward, never expose the deflected scene inside the shadow as a
-        // lensed speckle.
-        let cell_nearest = max(abs(snapped) - vec2<f32>(cell * 0.5), vec2<f32>(0.0));
-        let in_horizon = length(cell_nearest) < rs * size;
+        // EVENT HORIZON: solid black wherever a cell's *center* lies inside the
+        // shadow radius (any lens wins). Measuring to the snapped cell center —
+        // the same distance the photon ring uses below — instead of the cell's
+        // nearest edge drops the corner cells, so the disc reads as a pixel
+        // circle at every size. The nearest-edge test instead fills any cell the
+        // circle merely grazes, which at a few-pixel radius squares the shadow
+        // off into a block (corner cells sit only ~half a cell farther than edge
+        // cells). The floor at the cell's half-diagonal keeps the central block
+        // lit so the shadow steps down to a 2×2 and never blinks out at the
+        // bottom of a size pulse rather than rounding away one pixel at a time.
+        let shadow_world = max(rs * size, cell * 0.708);
+        let in_horizon = length(snapped) < shadow_world;
         if in_horizon {
             horizon = true;
             horizon_color = lens.black_color.rgb;
