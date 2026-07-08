@@ -50,6 +50,11 @@ struct LensingDisplay {
     // xy = viewport origin / target size, zw = viewport size / target size.
     // (0, 0, 1, 1) when no viewport is set (full-target render).
     viewport_rect: vec4<f32>,
+    // xy = mirror guard-band width per axis in full-target UV, z = mirror enable
+    // (1 on / 0 off), w unused.
+    edge_mirror: vec4<f32>,
+    // Linear-RGBA fallback color blended beyond the mirrored band; a = strength.
+    edge_fallback_color: vec4<f32>,
     quantization: QuantizationSettings,
     count: u32,
     lenses: array<LensData, 64>,
@@ -99,16 +104,63 @@ fn uv_from_world(world: vec2<f32>) -> vec2<f32> {
     return u.viewport_rect.xy + vp_uv * u.viewport_rect.zw;
 }
 
+// Reflect a coordinate that falls outside `[lo, hi]` back inside, across the
+// nearest edge (a single fold). Coordinates already inside pass through. Used to
+// fill the guard band: the region just off-screen mirrors the interior instead
+// of repeating the clamped border texel.
+fn reflect_coord(s: f32, lo: f32, hi: f32) -> f32 {
+    if s < lo {
+        return lo + (lo - s);
+    }
+    if s > hi {
+        return hi - (s - hi);
+    }
+    return s;
+}
+
+// Read the lit scene at a projected sample UV, resolving samples that land
+// outside the rendered viewport. The valid region is `viewport_rect`; a sample
+// past it would otherwise clamp to the border texel and smear into a band. It is
+// instead mirrored back across the crossed edge(s), then — for samples too far
+// out for mirroring to stay plausible — blended toward the configured fallback
+// color. `textureSampleLevel` keeps the read in per-fragment control flow
+// (implicit-derivative sampling demands uniformity).
+fn scene_at(sample_uv: vec2<f32>) -> vec3<f32> {
+    let lo = u.viewport_rect.xy;
+    let hi = u.viewport_rect.xy + u.viewport_rect.zw;
+    // Per-axis distance the sample lands outside the rendered region (0 inside).
+    let over = max(max(lo - sample_uv, sample_uv - hi), vec2<f32>(0.0));
+
+    // Inside the rendered region: straight read, no edge handling.
+    if over.x <= 0.0 && over.y <= 0.0 {
+        return textureSampleLevel(scene_tex, scene_sampler, sample_uv, 0.0).rgb;
+    }
+
+    // Mirror the off-screen sample back across the edge(s) it crossed. When
+    // mirroring is disabled (`edge_mirror.z == 0`) the sample is left as-is and
+    // the clamp-to-edge sampler carries it.
+    let mirrored = vec2<f32>(
+        reflect_coord(sample_uv.x, lo.x, hi.x),
+        reflect_coord(sample_uv.y, lo.y, hi.y),
+    );
+    let src_uv = mix(sample_uv, mirrored, u.edge_mirror.z);
+    let color = textureSampleLevel(scene_tex, scene_sampler, src_uv, 0.0).rgb;
+
+    // Beyond the mirrored guard band, ramp toward the fallback color. `t` is 1.0
+    // at the band's outer edge and grows with overshoot; the ramp spans one more
+    // band width. With zero fallback alpha this is a no-op and mirroring stands.
+    let margin = max(u.edge_mirror.xy, vec2<f32>(1e-6));
+    let t = max(over.x / margin.x, over.y / margin.y);
+    let blend = clamp(t - 1.0, 0.0, 1.0) * u.edge_fallback_color.a;
+    return mix(color, u.edge_fallback_color.rgb, blend);
+}
+
 // Lit scene at a world position: deflect by the field, project the deflected
-// world position back to screen, sample the view target. The deflected sample
-// is never culled for landing off-screen — the clamp-to-edge sampler reads the
-// border texel, so a strongly-deflected fragment pulls in the screen edge
-// rather than collapsing to black. `textureSampleLevel` keeps the read in
-// per-fragment control flow (implicit-derivative sampling demands uniformity).
+// world position back to screen, sample the view target.
 fn lensed_scene(world: vec2<f32>) -> vec3<f32> {
     let deflect = textureSample(velocity_field_tex, velocity_field_sampler, canvas_uv(world)).rg;
     let sample_uv = uv_from_world(world - deflect);
-    return textureSampleLevel(scene_tex, scene_sampler, sample_uv, 0.0).rgb;
+    return scene_at(sample_uv);
 }
 
 // Palette-quantize a color; pass-through when no palette is configured. The

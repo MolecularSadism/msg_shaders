@@ -62,6 +62,13 @@ struct LensingDisplayUniform {
     /// `xy` = viewport origin / target size, `zw` = viewport size / target size.
     /// `(0, 0, 1, 1)` when no viewport is set (full-target render).
     viewport_rect: Vec4,
+    /// Mirrored guard band for off-screen deflected samples. `xy` = band width
+    /// per axis in full-target UV (screen pixels normalized by target size),
+    /// `z` = mirror enable (`1.0` on, `0.0` off), `w` unused.
+    edge_mirror: Vec4,
+    /// Linear-RGBA fallback color blended in beyond the mirrored guard band.
+    /// The alpha scales the blend at full overshoot.
+    edge_fallback_color: Vec4,
     /// Palette quantization applied only to the photon-ring / shadow-edge band.
     /// `palette_size == 0` disables it.
     quantization: ColorQuantizeUniforms,
@@ -77,6 +84,8 @@ impl Default for LensingDisplayUniform {
             world_from_clip: Mat4::IDENTITY,
             canvas_center_extent: Vec4::new(0.0, 0.0, 1.0, 1.0),
             viewport_rect: Vec4::new(0.0, 0.0, 1.0, 1.0),
+            edge_mirror: Vec4::ZERO,
+            edge_fallback_color: Vec4::ZERO,
             quantization: ColorQuantizeUniforms::default(),
             count: 0,
             lenses: [LensData::default(); MAX_LENSES],
@@ -99,7 +108,7 @@ fn prepare_lensing_display_uniforms(
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
 ) {
-    let (clip_from_world, viewport_rect) = views
+    let (clip_from_world, viewport_rect, edge_mirror) = views
         .iter()
         .next()
         .map(|(ev, cam)| {
@@ -129,9 +138,29 @@ fn prepare_lensing_display_uniforms(
                 _ => Vec4::new(0.0, 0.0, 1.0, 1.0),
             };
 
-            (cfworld, vp_rect)
+            // Mirror guard-band width, converted from screen pixels to per-axis
+            // full-target UV so the shader can measure how far a deflected
+            // sample lands past the rendered region. `z` flags mirroring on.
+            let mirror = match cam.physical_target_size {
+                Some(target_size) if target_size.x > 0 && target_size.y > 0 => {
+                    let enabled = if extracted.edge_mirror_px > 0.0 {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    Vec4::new(
+                        extracted.edge_mirror_px / target_size.x as f32,
+                        extracted.edge_mirror_px / target_size.y as f32,
+                        enabled,
+                        0.0,
+                    )
+                }
+                _ => Vec4::ZERO,
+            };
+
+            (cfworld, vp_rect, mirror)
         })
-        .unwrap_or((Mat4::IDENTITY, Vec4::new(0.0, 0.0, 1.0, 1.0)));
+        .unwrap_or((Mat4::IDENTITY, Vec4::new(0.0, 0.0, 1.0, 1.0), Vec4::ZERO));
 
     let count = extracted.lens_count.min(MAX_LENSES as u32);
     let mut lenses = [LensData::default(); MAX_LENSES];
@@ -149,6 +178,8 @@ fn prepare_lensing_display_uniforms(
         world_from_clip: clip_from_world.inverse(),
         canvas_center_extent: extracted.canvas_center_extent,
         viewport_rect,
+        edge_mirror,
+        edge_fallback_color: extracted.edge_fallback_color,
         quantization: extracted.ring_quantization,
         count,
         lenses,

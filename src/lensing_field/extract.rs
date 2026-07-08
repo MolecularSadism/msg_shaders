@@ -30,6 +30,12 @@ pub struct ExtractedLensingField {
     pub force_scale: f32,
     pub decay: f32,
     pub dt: f32,
+    /// Mirrored guard-band width in screen pixels for the display pass. See
+    /// [`LensingFieldSettings::edge_mirror_px`].
+    pub edge_mirror_px: f32,
+    /// Linear-RGBA fallback color blended beyond the mirrored guard band. See
+    /// [`LensingFieldSettings::edge_fallback_color`].
+    pub edge_fallback_color: Vec4,
     /// Shape-tagged deflection sources for the inject pass.
     pub sources: [DeflectionSource; MAX_DEFLECTION_SOURCES],
     /// Number of populated entries in `sources`.
@@ -57,6 +63,8 @@ impl Default for ExtractedLensingField {
             force_scale: 1.0,
             decay: 0.0,
             dt: 0.016,
+            edge_mirror_px: 16.0,
+            edge_fallback_color: Vec4::ZERO,
             sources: [DeflectionSource::default(); MAX_DEFLECTION_SOURCES],
             source_count: 0,
             lens_center_size_shadow: [Vec4::ZERO; MAX_LENSES],
@@ -181,6 +189,8 @@ fn rebuild_extracted_lensing_field(
         force_scale: source.settings.force_scale,
         decay: source.settings.decay,
         dt: source.settings.dt,
+        edge_mirror_px: source.settings.edge_mirror_px,
+        edge_fallback_color: source.settings.edge_fallback_color,
         sources: source.sources,
         source_count: source.source_count,
         lens_center_size_shadow: source.lens_center_size_shadow,
