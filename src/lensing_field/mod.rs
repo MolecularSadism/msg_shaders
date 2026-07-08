@@ -46,6 +46,17 @@ pub struct LensingFieldSettings {
     pub decay: f32,
     /// Semi-Lagrangian advection time step.
     pub dt: f32,
+    /// Width, in screen pixels, of the mirrored guard band outside the rendered
+    /// viewport. A deflected sample that lands off-screen reads the scene
+    /// mirrored back across the nearest edge instead of the clamped border texel
+    /// (which otherwise smears into a band). `0.0` disables mirroring and leaves
+    /// off-screen samples clamped.
+    pub edge_mirror_px: f32,
+    /// Linear-RGBA color blended in beyond the mirrored guard band, where a
+    /// sample lands too far off-screen for mirroring to stay plausible. The
+    /// alpha is the blend strength at full overshoot; `0.0` alpha keeps the
+    /// mirror (or clamp, when `edge_mirror_px` is `0.0`) with no color fallback.
+    pub edge_fallback_color: Vec4,
 }
 
 impl Default for LensingFieldSettings {
@@ -54,6 +65,8 @@ impl Default for LensingFieldSettings {
             force_scale: 1.0,
             decay: 0.0,
             dt: 0.016,
+            edge_mirror_px: 16.0,
+            edge_fallback_color: Vec4::ZERO,
         }
     }
 }
