@@ -22,7 +22,7 @@ use crate::LensingHoleCamera;
 use crate::lensing_field::extract::LensingFieldExtractSource;
 
 /// Strength magnitude below which a deflection source is skipped during the
-/// gather. A resting [`PulseValue`]-driven deflector sits at zero between
+/// gather. A resting `PulseValue`-driven deflector sits at zero between
 /// pulses and contributes no force; dropping it frees a slot in the capped
 /// source array (and lets the display pass idle when nothing is deflecting).
 const MIN_DEFLECTION_STRENGTH: f32 = 1e-4;
@@ -49,7 +49,7 @@ pub const TAG_LINE: f32 = 2.0;
 /// dispatch on shape and unpacks the geometry rows per shape.
 #[derive(ShaderType, Clone, Copy, Default, Debug, PartialEq)]
 pub struct DeflectionSource {
-    /// `x` = shape tag ([`TAG_LENS`] / [`TAG_RING`] / [`TAG_LINE`]),
+    /// `x` = shape tag (`TAG_LENS` / `TAG_RING` / `TAG_LINE`),
     /// `y` = strength, `zw` reserved.
     pub tag_strength: Vec4,
     /// Geometry row 0. Layout depends on the shape tag:

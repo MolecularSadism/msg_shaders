@@ -468,7 +468,7 @@ pub struct BlackHoleOverlay {
     /// scene-capture image handle so the hole distorts the actual world.
     pub background: Option<Handle<Image>>,
     /// World-space center of the square scene-capture canvas (the camera's world
-    /// position). Computed each frame by [`sync_lensing_hole_to_camera`].
+    /// position). Computed each frame by `sync_lensing_hole_to_camera`.
     pub canvas_center: Vec2,
     /// World-space side lengths of the square scene-capture canvas (the viewport
     /// diagonal). Computed each frame; see [`lens_capture_extent`].
