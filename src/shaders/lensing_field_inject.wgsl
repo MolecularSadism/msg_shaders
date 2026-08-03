@@ -51,31 +51,36 @@ fn grid_to_world(coord: vec2<u32>) -> vec2<f32> {
     return center + vec2<f32>(uv.x - 0.5, 0.5 - uv.y) * extent;
 }
 
-// Radial outward lens deflection, peaking across the core and fading to nothing
-// at the rim. geom_a = (center.xy, size, core_radius); strength = tag_strength.y
-// is the peak deflection as a fraction of `size`.
+// Radial outward lens deflection: ramps up to a peak plateau, holds it, then
+// tapers to nothing at the rim. geom_a = (center.xy, size, core_radius),
+// geom_b.x = inner_radius; strength = tag_strength.y is the peak deflection as
+// a fraction of `size`.
 //
-// The profile is normalised in `core_radius`: it peaks at exactly
-// `strength * size` whatever the core is, so the core only shapes how the warp
-// tapers, never how strong it is. A pinhead core therefore keeps the full reach
-// and simply concentrates the bend nearer the centre — sizing the visual hole
-// no longer scales the lensing away with it.
-fn lens_force(world: vec2<f32>, g_a: vec4<f32>, strength: f32) -> vec2<f32> {
+// Three radii, the outer two as fractions of `size`:
+//   inner_radius  ramp from zero at the centre up to the peak
+//   core_radius   end of the plateau, where the outward taper starts
+//   size          the rim, where the deflection reaches zero
+//
+// The profile is normalised in all of them: it peaks at exactly `strength *
+// size` whatever the radii are, so they shape the warp without scaling it. A
+// pinhead inner radius keeps the full reach and simply puts the peak right at
+// the hole's edge — sizing the visual no longer scales the lensing with it.
+fn lens_force(world: vec2<f32>, g_a: vec4<f32>, g_b: vec4<f32>, strength: f32) -> vec2<f32> {
     let center = g_a.xy;
     let size   = max(g_a.z, 1e-4);
     let core   = clamp(g_a.w, 1e-3, 0.99);
+    let inner  = clamp(g_b.x, 1e-4, core);
     let delta  = world - center;
     let dist   = length(delta);
     let r      = dist / size;
     if r >= 1.0 {
         return vec2<f32>(0.0);
     }
-    // Inside the core the magnitude ramps up from zero at the exact centre, so
-    // the centre carries no direction singularity. Outside it falls off as 1/r,
-    // reaching zero at the rim.
-    let inner = clamp(r / core, 0.0, 1.0);
-    let outer = (core / max(r, core) - core) / (1.0 - core);
-    return (delta / max(dist, 1e-5)) * strength * size * inner * outer;
+    // Ramping in from zero at the exact centre leaves no direction singularity
+    // there; the taper outside the plateau falls off as 1/r.
+    let ramp  = clamp(r / inner, 0.0, 1.0);
+    let taper = (core / max(r, core) - core) / (1.0 - core);
+    return (delta / max(dist, 1e-5)) * strength * size * ramp * taper;
 }
 
 // Uniform outward push inside an annular sector. geom_a = (center.xy, inner,
@@ -145,7 +150,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let strength = s.tag_strength.y;
         switch tag {
             case 0u: {
-                total_force += lens_force(world, s.geom_a, strength);
+                total_force += lens_force(world, s.geom_a, s.geom_b, strength);
             }
             case 1u: {
                 total_force += ring_force(world, s.geom_a, s.geom_b, strength);
