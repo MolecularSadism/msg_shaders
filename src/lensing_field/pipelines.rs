@@ -36,6 +36,9 @@ pub(crate) struct LensingFieldUniform {
     pub force_scale: f32,
     /// Advection time step.
     pub dt: f32,
+    /// Falloff exponent shared by every `Lens` source. See
+    /// [`LensingFieldSettings::lens_falloff`](crate::LensingFieldSettings::lens_falloff).
+    pub lens_falloff: f32,
 }
 
 impl Default for LensingFieldUniform {
@@ -47,6 +50,7 @@ impl Default for LensingFieldUniform {
             decay: 0.0,
             force_scale: 1.0,
             dt: 0.016,
+            lens_falloff: 1.0,
         }
     }
 }
@@ -138,6 +142,7 @@ pub(crate) fn prepare_lensing_field_uniforms(
         decay: extracted.decay,
         force_scale: extracted.force_scale,
         dt: extracted.dt,
+        lens_falloff: extracted.lens_falloff,
     };
     pipelines.uniforms.set(uniform);
     pipelines

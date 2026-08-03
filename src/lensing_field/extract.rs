@@ -30,6 +30,9 @@ pub struct ExtractedLensingField {
     pub force_scale: f32,
     pub decay: f32,
     pub dt: f32,
+    /// Falloff exponent shared by every `Lens` source. See
+    /// [`LensingFieldSettings::lens_falloff`](crate::LensingFieldSettings::lens_falloff).
+    pub lens_falloff: f32,
     /// Mirrored guard-band width in screen pixels for the display pass. See
     /// [`LensingFieldSettings::edge_mirror_px`].
     pub edge_mirror_px: f32,
@@ -63,6 +66,7 @@ impl Default for ExtractedLensingField {
             force_scale: 1.0,
             decay: 0.0,
             dt: 0.016,
+            lens_falloff: 1.0,
             edge_mirror_px: 16.0,
             edge_fallback_color: Vec4::ZERO,
             sources: [DeflectionSource::default(); MAX_DEFLECTION_SOURCES],
@@ -189,6 +193,7 @@ fn rebuild_extracted_lensing_field(
         force_scale: source.settings.force_scale,
         decay: source.settings.decay,
         dt: source.settings.dt,
+        lens_falloff: source.settings.lens_falloff,
         edge_mirror_px: source.settings.edge_mirror_px,
         edge_fallback_color: source.settings.edge_fallback_color,
         sources: source.sources,

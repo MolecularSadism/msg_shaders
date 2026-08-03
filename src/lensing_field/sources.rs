@@ -54,12 +54,12 @@ pub struct DeflectionSource {
     /// `y` = strength, `zw` reserved.
     pub tag_strength: Vec4,
     /// Geometry row 0. Layout depends on the shape tag:
-    /// - Lens: `(center.xy, size, core_radius)`
+    /// - Lens: `(center.xy, size, unused)`
     /// - Ring: `(center.xy, inner_radius, thickness)`
     /// - Line: `(center.xy, half_length, thickness)`
     pub geom_a: Vec4,
     /// Geometry row 1. Layout depends on the shape tag:
-    /// - Lens: unused
+    /// - Lens: `(inner_radius, 0, 0, 0)`
     /// - Ring: `(start_angle, arc, 0, 0)`
     /// - Line: `(rotation, 0, 0, 0)`
     pub geom_b: Vec4,
@@ -72,26 +72,25 @@ pub struct DeflectionSource {
 /// the inject shader.
 #[derive(Component, Reflect, Clone, Copy, Debug, PartialEq)]
 pub enum DeflectionShape {
-    /// Radial outward deflection that peaks across an annular plateau and fades
-    /// to nothing at the rim — the gravitational-lens source.
+    /// Radial outward deflection falling monotonically from an inner radius to
+    /// the rim — the gravitational-lens source.
     ///
-    /// Three radii shape it, the outer two as fractions of `size`:
+    /// Two radii bound it:
     ///
     /// - `size` — the reach in world units; the deflection is zero at and past it.
-    /// - `core_radius` — outer edge of the peak plateau, where the outward taper begins. Widening
-    ///   it carries full-strength bend further out.
-    /// - `inner_radius` — inner edge of the plateau. Inside it the deflection ramps back down to
-    ///   zero at the exact centre, so the centre carries no direction singularity. Set it to the
-    ///   radius of whatever the lens sits behind — a black hole's event horizon — and the bend
-    ///   peaks right where that becomes visible, wasting no gradient under an opaque disc.
+    /// - `inner_radius` — as a fraction of `size`, where the deflection peaks. Set it to the
+    ///   radius of whatever the lens sits behind — a black hole's event horizon — and the bend is
+    ///   strongest exactly where that stops covering it. Nothing is computed inside it, since a
+    ///   lens with a visual can only ever have that region painted over.
     ///
-    /// The peak is `strength * size` whatever the radii are, so they shape the
-    /// warp without scaling it: a lens can be as small or as large as its
-    /// owner's visual and still bend the scene across its full reach.
+    /// How fast the bend decays between the two is not authored per lens: it is
+    /// the shared `lens_falloff` exponent in
+    /// [`LensingFieldSettings`](crate::LensingFieldSettings), against which the
+    /// profile is normalised, so the peak is `strength * size` and the rim is
+    /// zero whatever that exponent is.
     Lens {
         center: Vec2,
         size: f32,
-        core_radius: f32,
         inner_radius: f32,
     },
 
@@ -129,11 +128,10 @@ impl DeflectionShape {
             DeflectionShape::Lens {
                 center,
                 size,
-                core_radius,
                 inner_radius,
             } => DeflectionSource {
                 tag_strength: Vec4::new(TAG_LENS, strength, 0.0, 0.0),
-                geom_a: Vec4::new(center.x, center.y, size, core_radius),
+                geom_a: Vec4::new(center.x, center.y, size, 0.0),
                 geom_b: Vec4::new(inner_radius, 0.0, 0.0, 0.0),
             },
             DeflectionShape::Ring {
@@ -174,14 +172,12 @@ impl DeflectionShape {
             DeflectionShape::Lens {
                 center,
                 size,
-                core_radius,
                 inner_radius,
             } => DeflectionShape::Lens {
                 center: to_world(center),
                 size: size * s,
-                // Both are fractions of `size`, so they stay invariant under
-                // scaling — the whole profile scales with the reach.
-                core_radius,
+                // A fraction of `size`, so it stays invariant under scaling —
+                // the whole profile scales with the reach.
                 inner_radius,
             },
             DeflectionShape::Ring {
@@ -357,21 +353,28 @@ mod tests {
     }
 
     /// Rust port of `lens_force` in `lensing_field_inject.wgsl`, reading the
-    /// packed geometry rows / strength.
-    fn lens_force_ref(world: Vec2, geom_a: Vec4, geom_b: Vec4, strength: f32) -> Vec2 {
+    /// packed geometry rows / strength. `falloff` is the shared exponent the
+    /// shader takes from its uniform.
+    fn lens_force_ref(
+        world: Vec2,
+        geom_a: Vec4,
+        geom_b: Vec4,
+        strength: f32,
+        falloff: f32,
+    ) -> Vec2 {
         let center = Vec2::new(geom_a.x, geom_a.y);
         let size = geom_a.z.max(1e-4);
-        let core = geom_a.w.clamp(1e-3, 0.99);
-        let inner = geom_b.x.clamp(1e-4, core);
+        let inner = geom_b.x.clamp(1e-4, 0.99);
         let delta = world - center;
         let dist = delta.length();
         let r = dist / size;
-        if r >= 1.0 {
+        if r >= 1.0 || r < inner {
             return Vec2::ZERO;
         }
-        let ramp = (r / inner).clamp(0.0, 1.0);
-        let taper = (core / r.max(core) - core) / (1.0 - core);
-        (delta / dist.max(1e-5)) * strength * size * ramp * taper
+        let k = falloff.max(1e-3);
+        let at_rim = inner.powf(k);
+        let profile = ((inner / r).powf(k) - at_rim) / (1.0 - at_rim).max(1e-5);
+        (delta / dist.max(1e-5)) * strength * size * profile
     }
 
     fn ring_force_ref(world: Vec2, geom_a: Vec4, geom_b: Vec4, strength: f32) -> Vec2 {
@@ -408,113 +411,119 @@ mod tests {
     }
 
     #[test]
-    fn lens_packs_its_three_radii() {
+    fn lens_packs_its_reach_and_inner_radius() {
         let center = Vec2::new(10.0, -4.0);
         let size = 3.0;
-        let core = 0.12;
         let inner = 0.04;
         let strength = 1.85;
         let src = DeflectionShape::Lens {
             center,
             size,
-            core_radius: core,
             inner_radius: inner,
         }
         .pack(strength);
 
         assert_eq!(src.tag_strength.x, TAG_LENS);
         assert_eq!(src.tag_strength.y, strength);
-        assert_eq!(src.geom_a, Vec4::new(center.x, center.y, size, core));
+        assert_eq!(src.geom_a, Vec4::new(center.x, center.y, size, 0.0));
         assert_eq!(src.geom_b, Vec4::new(inner, 0.0, 0.0, 0.0));
     }
 
-    fn lens_at(size: f32, core: f32, inner: f32, strength: f32) -> impl Fn(f32) -> Vec2 {
+    fn lens_at(size: f32, inner: f32, strength: f32, falloff: f32) -> impl Fn(f32) -> Vec2 {
         let src = DeflectionShape::Lens {
             center: Vec2::ZERO,
             size,
-            core_radius: core,
             inner_radius: inner,
         }
         .pack(strength);
-        move |d: f32| lens_force_ref(Vec2::new(d, 0.0), src.geom_a, src.geom_b, strength)
+        move |d: f32| lens_force_ref(Vec2::new(d, 0.0), src.geom_a, src.geom_b, strength, falloff)
     }
 
-    /// The deflection holds `strength * size` across the whole plateau, points
-    /// outward, and vanishes at both the exact centre and the rim.
+    /// The deflection peaks at the inner radius, falls monotonically from there,
+    /// and is zero at the rim — and nothing at all is produced inside the inner
+    /// radius, the region an event-horizon disc covers.
     #[test]
-    fn lens_force_holds_its_peak_across_the_plateau() {
-        let (size, core, inner, strength) = (40.0, 0.5, 0.1, 0.1);
-        let at = lens_at(size, core, inner, strength);
-        let peak = Vec2::new(strength * size, 0.0);
+    fn lens_force_falls_monotonically_from_the_inner_radius() {
+        let (size, inner, strength) = (40.0, 0.1, 0.1);
+        let at = lens_at(size, inner, strength, 1.0);
 
-        // Plateau: outward at full strength from the inner edge to the core.
-        for r in [inner, 0.2, 0.35, core] {
-            let force = at(size * r);
-            assert!(
-                (force - peak).length() < 1e-3,
-                "r {r}: {force:?} is not the peak {peak:?}"
-            );
+        // Peak at the inner radius, pointing outward.
+        let peak = at(size * inner);
+        assert!((peak - Vec2::new(strength * size, 0.0)).length() < 1e-3);
+        // Inside the inner radius: skipped outright, no work and no force.
+        for r in [0.0, inner * 0.25, inner * 0.9] {
+            assert_eq!(at(size * r), Vec2::ZERO, "r {r} must be skipped");
         }
-        // Centre and rim: nothing.
-        assert!(at(0.0).length() < 1e-4);
+        // Zero at and past the rim.
         assert_eq!(at(size), Vec2::ZERO);
         assert_eq!(at(size * 1.5), Vec2::ZERO);
-        // Inside the plateau the magnitude only rises, outside it only falls.
-        let mut previous = 0.0;
-        for step in 0..=10 {
-            let current = at(size * inner * step as f32 / 10.0).length();
-            assert!(
-                current >= previous,
-                "ramp step {step}: {current} < {previous}"
-            );
+        // Strictly decreasing in between.
+        let mut previous = peak.length();
+        for step in 1..=10 {
+            let r = inner + (1.0 - inner) * step as f32 / 10.0;
+            let current = at(size * r).length();
+            assert!(current < previous, "r {r}: {current} >= {previous}");
             previous = current;
         }
-        for step in 0..=10 {
-            let current = at(size * (core + (1.0 - core) * step as f32 / 10.0)).length();
+    }
+
+    /// The shared falloff exponent reshapes the curve without moving its ends:
+    /// every exponent reads the full peak at the inner radius and zero at the
+    /// rim, so retuning it globally never recalibrates an individual lens.
+    #[test]
+    fn falloff_exponent_is_normalised_at_both_ends() {
+        let (size, inner, strength) = (40.0, 0.05, 0.1);
+        for falloff in [0.25, 0.5, 1.0, 2.0, 4.0] {
+            let at = lens_at(size, inner, strength, falloff);
             assert!(
-                current <= previous,
-                "taper step {step}: {current} > {previous}"
+                (at(size * inner).length() - strength * size).abs() < 1e-2,
+                "falloff {falloff}: peak {} != {}",
+                at(size * inner).length(),
+                strength * size
             );
-            previous = current;
+            assert!(
+                at(size * 0.999).length() < strength * size * 1e-2,
+                "falloff {falloff}: rim {} is not ~zero",
+                at(size * 0.999).length()
+            );
         }
+
+        // Between the ends it is purely a shape knob: a smaller exponent carries
+        // more of the bend outward, a larger one concentrates it inward.
+        let midpoint = |falloff: f32| lens_at(size, inner, strength, falloff)(size * 0.5).length();
+        assert!(midpoint(0.5) > midpoint(1.0));
+        assert!(midpoint(1.0) > midpoint(2.0));
     }
 
     /// The inner radius moves where the bend peaks without touching how strong
-    /// it is or how far it reaches: a lens can hug a pinhead event horizon and
-    /// still carry its full plateau outward.
+    /// it is: a lens can hug a pinhead event horizon at full strength.
     #[test]
     fn inner_radius_moves_the_peak_without_scaling_it() {
-        let (size, core, strength) = (40.0, 0.5, 0.1);
+        let (size, strength) = (40.0, 0.1);
         for inner in [0.4, 0.1, 0.01, 0.001] {
-            let at = lens_at(size, core, inner, strength);
-            // Peak reached at the inner edge, and still held at the core.
-            for r in [inner, core] {
-                assert!(
-                    (at(size * r).length() - strength * size).abs() < 1e-2,
-                    "inner {inner} at r {r}: {} != {}",
-                    at(size * r).length(),
-                    strength * size
-                );
-            }
-            // Just inside the inner edge the bend is already tapering off, so
-            // nothing is spent under whatever visual the lens sits behind.
-            assert!(at(size * inner * 0.5).length() < strength * size * 0.75);
+            let at = lens_at(size, inner, strength, 1.0);
+            assert!(
+                (at(size * inner).length() - strength * size).abs() < 1e-2,
+                "inner {inner}: peak {} != {}",
+                at(size * inner).length(),
+                strength * size
+            );
         }
     }
 
     /// The peak deflection is set by `strength` and the reach alone: shrinking
-    /// the plateau to a sliver leaves it untouched. This is what lets a tiny
+    /// the inner radius to a sliver leaves it untouched. This is what lets a tiny
     /// visual hole keep a full-strength, full-reach lens.
     #[test]
     fn lens_peak_is_independent_of_its_radii() {
         let size = 40.0;
         let strength = 0.1;
-        for core in [0.5, 0.25, 0.05, 0.005] {
-            let at = lens_at(size, core, core, strength);
-            let peak = at(size * core).length();
+        for inner in [0.5, 0.25, 0.05, 0.005] {
+            let at = lens_at(size, inner, strength, 1.0);
+            let peak = at(size * inner).length();
             assert!(
                 (peak - strength * size).abs() < 1e-2,
-                "core {core}: peak {peak} != {}",
+                "inner {inner}: peak {peak} != {}",
                 strength * size
             );
         }
@@ -627,7 +636,6 @@ mod tests {
         let lens = DeflectionShape::Lens {
             center: Vec2::new(2.0, 3.0),
             size: 5.0,
-            core_radius: 0.1,
             inner_radius: 0.05,
         }
         .world_aabb();

@@ -32,6 +32,7 @@ struct LensingFieldUniform {
     decay:        f32,
     force_scale:  f32,
     dt:           f32,
+    lens_falloff: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: LensingFieldUniform;
@@ -51,36 +52,40 @@ fn grid_to_world(coord: vec2<u32>) -> vec2<f32> {
     return center + vec2<f32>(uv.x - 0.5, 0.5 - uv.y) * extent;
 }
 
-// Radial outward lens deflection: ramps up to a peak plateau, holds it, then
-// tapers to nothing at the rim. geom_a = (center.xy, size, core_radius),
-// geom_b.x = inner_radius; strength = tag_strength.y is the peak deflection as
-// a fraction of `size`.
+// Radial outward lens deflection, falling monotonically from the inner radius
+// to the rim. geom_a = (center.xy, size, unused), geom_b.x = inner_radius as a
+// fraction of `size`; strength = tag_strength.y is the peak deflection as a
+// fraction of `size`.
 //
-// Three radii, the outer two as fractions of `size`:
-//   inner_radius  ramp from zero at the centre up to the peak
-//   core_radius   end of the plateau, where the outward taper starts
-//   size          the rim, where the deflection reaches zero
+// Two radii bound it: the deflection peaks at `inner_radius` — normally the
+// event horizon of whatever the lens sits behind — and reaches zero at `size`.
 //
-// The profile is normalised in all of them: it peaks at exactly `strength *
-// size` whatever the radii are, so they shape the warp without scaling it. A
-// pinhead inner radius keeps the full reach and simply puts the peak right at
-// the hole's edge — sizing the visual no longer scales the lensing with it.
+//   profile(r) = ((inner/r)^k - (inner/1)^k) / (1 - (inner/1)^k)
+//
+// `k` is `u.lens_falloff`, one global shape knob (`k = 1` is the physical
+// inverse-distance law, `k < 1` stretches the bend further out). The subtract
+// and divide normalise it: the profile is 1 at `inner_radius` and 0 at the rim
+// for *every* k, so retuning k reshapes the curve without rescaling any lens
+// authored against it.
+//
+// Nothing is computed inside `inner_radius`. That region sits behind an opaque
+// event-horizon disc wherever a lens has a visual, so it can only ever be
+// painted over — and for a hole grown to cover the screen it is nearly the whole
+// grid, which the early-out skips outright.
 fn lens_force(world: vec2<f32>, g_a: vec4<f32>, g_b: vec4<f32>, strength: f32) -> vec2<f32> {
     let center = g_a.xy;
     let size   = max(g_a.z, 1e-4);
-    let core   = clamp(g_a.w, 1e-3, 0.99);
-    let inner  = clamp(g_b.x, 1e-4, core);
+    let inner  = clamp(g_b.x, 1e-4, 0.99);
     let delta  = world - center;
     let dist   = length(delta);
     let r      = dist / size;
-    if r >= 1.0 {
+    if r >= 1.0 || r < inner {
         return vec2<f32>(0.0);
     }
-    // Ramping in from zero at the exact centre leaves no direction singularity
-    // there; the taper outside the plateau falls off as 1/r.
-    let ramp  = clamp(r / inner, 0.0, 1.0);
-    let taper = (core / max(r, core) - core) / (1.0 - core);
-    return (delta / max(dist, 1e-5)) * strength * size * ramp * taper;
+    let k       = max(u.lens_falloff, 1e-3);
+    let at_rim  = pow(inner, k);
+    let profile = (pow(inner / r, k) - at_rim) / max(1.0 - at_rim, 1e-5);
+    return (delta / max(dist, 1e-5)) * strength * size * profile;
 }
 
 // Uniform outward push inside an annular sector. geom_a = (center.xy, inner,

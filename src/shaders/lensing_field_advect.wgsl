@@ -22,6 +22,7 @@ struct LensingFieldUniform {
     decay:        f32,
     force_scale:  f32,
     dt:           f32,
+    lens_falloff: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: LensingFieldUniform;

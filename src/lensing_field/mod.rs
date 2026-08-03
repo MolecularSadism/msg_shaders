@@ -46,6 +46,17 @@ pub struct LensingFieldSettings {
     pub decay: f32,
     /// Semi-Lagrangian advection time step.
     pub dt: f32,
+    /// Falloff exponent shared by every `Lens` deflection source: how fast the
+    /// bend decays from a lens's inner radius out to its reach.
+    ///
+    /// `1.0` is the physical inverse-distance law; below `1.0` the bend carries
+    /// further out, above it concentrates near the inner radius. This is one
+    /// global shape knob rather than a per-lens field, because the profile is
+    /// normalised against it — every lens reads `1.0` at its inner radius and
+    /// `0.0` at its reach whatever this is set to. Retuning it therefore
+    /// reshapes every lens at once without recalibrating any of them, and an
+    /// individual effect only ever authors its own reach.
+    pub lens_falloff: f32,
     /// Width, in screen pixels, of the mirrored guard band outside the rendered
     /// viewport. A deflected sample that lands off-screen reads the scene
     /// mirrored back across the nearest edge instead of the clamped border texel
@@ -65,6 +76,7 @@ impl Default for LensingFieldSettings {
             force_scale: 1.0,
             decay: 0.0,
             dt: 0.016,
+            lens_falloff: 1.0,
             edge_mirror_px: 16.0,
             edge_fallback_color: Vec4::ZERO,
         }
