@@ -2,11 +2,12 @@
 //
 // The inject pass (`lensing_field_inject.wgsl`) loops over an array of
 // shape-tagged [`DeflectionSource`]s and sums each one's force into the
-// velocity field. The black hole is one shape (`Lens`); expanding explosion
-// rings and directional shoves are others (`Ring`, `Line`). Every source
-// contributes deflection only — the photon-ring / event-horizon disc is drawn
-// solely from the visual `LensData[]` array (see `lensing_display.wgsl`), which
-// this module does not touch.
+// velocity field. A gravitational lens is one shape (`Lens`); expanding
+// explosion rings and directional shoves are others (`Ring`, `Line`). Every
+// source contributes deflection only — the photon-ring / event-horizon disc is
+// drawn solely from the visual `LensData[]` array (see `lensing_display.wgsl`),
+// which this module does not touch. A `Lens` therefore needs no visual at all,
+// and one that has a visual sizes it independently of its reach.
 //
 // Authoring is in world units via [`DeflectionShape`]. Gameplay injects sources
 // two ways: a persistent [`LightDeflector`] component (transformed by the
@@ -53,7 +54,7 @@ pub struct DeflectionSource {
     /// `y` = strength, `zw` reserved.
     pub tag_strength: Vec4,
     /// Geometry row 0. Layout depends on the shape tag:
-    /// - Lens: `(center.xy, size, shadow_radius)`
+    /// - Lens: `(center.xy, size, core_radius)`
     /// - Ring: `(center.xy, inner_radius, thickness)`
     /// - Line: `(center.xy, half_length, thickness)`
     pub geom_a: Vec4,
@@ -71,14 +72,19 @@ pub struct DeflectionSource {
 /// the inject shader.
 #[derive(Component, Reflect, Clone, Copy, Debug, PartialEq)]
 pub enum DeflectionShape {
-    /// Radial Schwarzschild force from the photon sphere outward — the
-    /// black-hole source. `size` is the visible halo radius (force fades to zero
-    /// at `size`); `shadow_radius` is the event-horizon radius as a fraction of
-    /// `size`. Force math is identical to the legacy black-hole inject loop.
+    /// Radial outward deflection that peaks across a core disc and fades to
+    /// nothing at the rim — the gravitational-lens source.
+    ///
+    /// `size` is the reach in world units (the deflection is zero at and beyond
+    /// it) and `core_radius` is, as a fraction of `size`, the disc inside which
+    /// the deflection holds its peak. The peak itself is `strength * size`
+    /// whatever the core is, so `core_radius` shapes the falloff without scaling
+    /// the warp: a lens can be as small or as large as its owner's visual and
+    /// still bend the scene across its full reach.
     Lens {
         center: Vec2,
         size: f32,
-        shadow_radius: f32,
+        core_radius: f32,
     },
 
     /// Annular sector pushing radially outward with uniform magnitude inside the
@@ -115,10 +121,10 @@ impl DeflectionShape {
             DeflectionShape::Lens {
                 center,
                 size,
-                shadow_radius,
+                core_radius,
             } => DeflectionSource {
                 tag_strength: Vec4::new(TAG_LENS, strength, 0.0, 0.0),
-                geom_a: Vec4::new(center.x, center.y, size, shadow_radius),
+                geom_a: Vec4::new(center.x, center.y, size, core_radius),
                 geom_b: Vec4::ZERO,
             },
             DeflectionShape::Ring {
@@ -159,12 +165,12 @@ impl DeflectionShape {
             DeflectionShape::Lens {
                 center,
                 size,
-                shadow_radius,
+                core_radius,
             } => DeflectionShape::Lens {
                 center: to_world(center),
                 size: size * s,
                 // A fraction of `size`, so it stays invariant under scaling.
-                shadow_radius,
+                core_radius,
             },
             DeflectionShape::Ring {
                 center,
@@ -231,20 +237,31 @@ impl DeflectionShape {
 pub struct LightDeflector {
     /// Shape authored in the entity's local space.
     pub shape: DeflectionShape,
-    /// Force magnitude passed to the shape's inject branch. Dereferencing a
-    /// `LightDeflector` yields this scalar, so a `PulseValue<LightDeflector>`
-    /// can drive it directly.
+    /// Force magnitude passed to the shape's inject branch — for a `Lens` the
+    /// peak deflection as a fraction of its `size`, for `Ring` / `Line` the
+    /// world-space push. Dereferencing a `LightDeflector` yields this scalar, so
+    /// a `PulseValue<LightDeflector>` can drive it directly.
     #[deref]
     pub strength: f32,
 }
 
 impl LightDeflector {
-    /// Sets the halo radius of a `Lens` shape, leaving other shapes unchanged.
-    /// Lets a size-animating system (a black hole, the level-ending hole) keep
-    /// the deflection in lockstep with the visual halo it drives.
+    /// Sets the reach of a `Lens` shape, leaving other shapes unchanged. Lets a
+    /// size-animating system (a black hole, the level-ending hole) grow the
+    /// deflection with whatever it drives.
     pub fn set_lens_size(&mut self, size: f32) {
         if let DeflectionShape::Lens { size: s, .. } = &mut self.shape {
             *s = size;
+        }
+    }
+
+    /// Current reach of a `Lens` shape, or `None` for the other shapes. Lets a
+    /// driver skip a write — and the change detection that comes with it — when
+    /// the size it computed is the one already stored.
+    pub fn lens_size(&self) -> Option<f32> {
+        match self.shape {
+            DeflectionShape::Lens { size, .. } => Some(size),
+            _ => None,
         }
     }
 }
@@ -332,32 +349,16 @@ mod tests {
     fn lens_force_ref(world: Vec2, geom_a: Vec4, strength: f32) -> Vec2 {
         let center = Vec2::new(geom_a.x, geom_a.y);
         let size = geom_a.z.max(1e-4);
-        let rs = geom_a.w;
+        let core = geom_a.w.clamp(1e-3, 0.99);
         let delta = world - center;
         let dist = delta.length();
         let r = dist / size;
-        if r >= 1.0 || r < rs {
+        if r >= 1.0 {
             return Vec2::ZERO;
         }
-        let dr = (r - rs).max(rs * 0.1);
-        let mag = strength * rs * rs / dr;
-        (delta / dist.max(1e-5)) * mag * size
-    }
-
-    /// The legacy black-hole inject force, lifted verbatim from the pre-migration
-    /// loop body, reading raw fields.
-    fn legacy_force(world: Vec2, center: Vec2, size: f32, rs: f32, strength: f32) -> Vec2 {
-        let size = size.max(1e-4);
-        let delta = world - center;
-        let dist = delta.length();
-        let r = dist / size;
-        if r >= 1.0 || r < rs {
-            return Vec2::ZERO;
-        }
-        let dr = (r - rs).max(rs * 0.1);
-        let mag = strength * rs * rs / dr;
-        let dir = delta / dist.max(1e-5);
-        dir * mag * size
+        let inner = (r / core).clamp(0.0, 1.0);
+        let outer = (core / r.max(core) - core) / (1.0 - core);
+        (delta / dist.max(1e-5)) * strength * size * inner * outer
     }
 
     fn ring_force_ref(world: Vec2, geom_a: Vec4, geom_b: Vec4, strength: f32) -> Vec2 {
@@ -394,39 +395,75 @@ mod tests {
     }
 
     #[test]
-    fn lens_pack_reconstructs_legacy_force() {
+    fn lens_packs_into_geom_a() {
         let center = Vec2::new(10.0, -4.0);
         let size = 3.0;
-        let rs = 0.12;
+        let core = 0.12;
         let strength = 1.85;
         let src = DeflectionShape::Lens {
             center,
             size,
-            shadow_radius: rs,
+            core_radius: core,
         }
         .pack(strength);
 
         assert_eq!(src.tag_strength.x, TAG_LENS);
         assert_eq!(src.tag_strength.y, strength);
-        assert_eq!(src.geom_a, Vec4::new(center.x, center.y, size, rs));
+        assert_eq!(src.geom_a, Vec4::new(center.x, center.y, size, core));
         assert_eq!(src.geom_b, Vec4::ZERO);
+    }
 
-        // The packed Lens source, run through the shader's `lens_force`, matches
-        // the legacy inline force at every sampled offset (inside halo, inside
-        // horizon, outside halo).
-        for offset in [
-            Vec2::new(0.5, 0.0),
-            Vec2::new(0.0, 1.7),
-            Vec2::new(-2.0, 2.0),
-            Vec2::new(0.1, 0.05),
-            Vec2::new(5.0, 5.0),
-        ] {
-            let world = center + offset;
-            let packed = lens_force_ref(world, src.geom_a, src.tag_strength.y);
-            let legacy = legacy_force(world, center, size, rs, strength);
+    /// The lens deflection peaks at `strength * size` at the core edge, points
+    /// outward, and vanishes at both the exact centre and the rim.
+    #[test]
+    fn lens_force_peaks_at_the_core_edge() {
+        let size = 40.0;
+        let core = 0.25;
+        let strength = 0.1;
+        let src = DeflectionShape::Lens {
+            center: Vec2::ZERO,
+            size,
+            core_radius: core,
+        }
+        .pack(strength);
+        let at = |d: f32| lens_force_ref(Vec2::new(d, 0.0), src.geom_a, strength);
+
+        // Core edge: outward, magnitude `strength * size`.
+        let peak = at(size * core);
+        assert!((peak - Vec2::new(strength * size, 0.0)).length() < 1e-3);
+        // Centre and rim: nothing.
+        assert!(at(0.0).length() < 1e-4);
+        assert_eq!(at(size), Vec2::ZERO);
+        assert_eq!(at(size * 1.5), Vec2::ZERO);
+        // Between the core and the rim the magnitude only falls.
+        let mut previous = peak.length();
+        for step in 1..10 {
+            let current = at(size * (core + (1.0 - core) * step as f32 / 10.0)).length();
+            assert!(current <= previous, "step {step}: {current} > {previous}");
+            previous = current;
+        }
+    }
+
+    /// The peak deflection is set by `strength` and the reach alone: shrinking
+    /// the core to a pinhead leaves it untouched. This is what lets a tiny
+    /// visual hole keep a full-strength, full-reach lens.
+    #[test]
+    fn lens_peak_is_independent_of_core_radius() {
+        let size = 40.0;
+        let strength = 0.1;
+        for core in [0.5, 0.25, 0.05, 0.005] {
+            let src = DeflectionShape::Lens {
+                center: Vec2::ZERO,
+                size,
+                core_radius: core,
+            }
+            .pack(strength);
+            let peak = lens_force_ref(Vec2::new(size * core, 0.0), src.geom_a, strength);
             assert!(
-                (packed - legacy).length() < 1e-5,
-                "offset {offset:?}: packed {packed:?} vs legacy {legacy:?}"
+                (peak.length() - strength * size).abs() < 1e-2,
+                "core {core}: peak {} != {}",
+                peak.length(),
+                strength * size
             );
         }
     }
@@ -538,7 +575,7 @@ mod tests {
         let lens = DeflectionShape::Lens {
             center: Vec2::new(2.0, 3.0),
             size: 5.0,
-            shadow_radius: 0.1,
+            core_radius: 0.1,
         }
         .world_aabb();
         assert_eq!(lens.min, Vec2::new(-3.0, -2.0));

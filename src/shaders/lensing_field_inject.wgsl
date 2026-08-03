@@ -51,23 +51,31 @@ fn grid_to_world(coord: vec2<u32>) -> vec2<f32> {
     return center + vec2<f32>(uv.x - 0.5, 0.5 - uv.y) * extent;
 }
 
-// Black-hole Schwarzschild force: radial, outward, from the photon sphere to the
-// outer halo. geom_a = (center.xy, size, shadow_radius); strength = tag_strength.y.
+// Radial outward lens deflection, peaking across the core and fading to nothing
+// at the rim. geom_a = (center.xy, size, core_radius); strength = tag_strength.y
+// is the peak deflection as a fraction of `size`.
+//
+// The profile is normalised in `core_radius`: it peaks at exactly
+// `strength * size` whatever the core is, so the core only shapes how the warp
+// tapers, never how strong it is. A pinhead core therefore keeps the full reach
+// and simply concentrates the bend nearer the centre — sizing the visual hole
+// no longer scales the lensing away with it.
 fn lens_force(world: vec2<f32>, g_a: vec4<f32>, strength: f32) -> vec2<f32> {
     let center = g_a.xy;
     let size   = max(g_a.z, 1e-4);
-    let rs     = g_a.w;
+    let core   = clamp(g_a.w, 1e-3, 0.99);
     let delta  = world - center;
     let dist   = length(delta);
     let r      = dist / size;
-    // Inject within the halo only; skip the horizon interior to avoid degeneracy
-    // at r ~ rs.
-    if r >= 1.0 || r < rs {
+    if r >= 1.0 {
         return vec2<f32>(0.0);
     }
-    let dr  = max(r - rs, rs * 0.1);
-    let mag = strength * rs * rs / dr;
-    return (delta / max(dist, 1e-5)) * mag * size;
+    // Inside the core the magnitude ramps up from zero at the exact centre, so
+    // the centre carries no direction singularity. Outside it falls off as 1/r,
+    // reaching zero at the rim.
+    let inner = clamp(r / core, 0.0, 1.0);
+    let outer = (core / max(r, core) - core) / (1.0 - core);
+    return (delta / max(dist, 1e-5)) * strength * size * inner * outer;
 }
 
 // Uniform outward push inside an annular sector. geom_a = (center.xy, inner,
