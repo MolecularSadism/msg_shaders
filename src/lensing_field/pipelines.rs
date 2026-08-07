@@ -162,11 +162,20 @@ impl Plugin for LensingFieldPipelinesPlugin {
 
         render_app.add_systems(
             Render,
-            prepare_lensing_field_uniforms.in_set(RenderSystems::Prepare),
+            prepare_lensing_field_uniforms
+                .in_set(RenderSystems::Prepare)
+                .run_if(resource_exists::<LensingFieldPipelines>),
         );
     }
 
     fn finish(&self, app: &mut App) {
+        let has_compute = app
+            .world()
+            .get_resource::<RenderDevice>()
+            .is_some_and(|device| device.limits().max_compute_workgroups_per_dimension > 0);
+        if !has_compute {
+            return;
+        }
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
         };

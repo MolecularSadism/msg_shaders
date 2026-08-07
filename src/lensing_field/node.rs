@@ -113,7 +113,9 @@ impl ViewNode for LensingFieldNode {
             return Ok(());
         };
 
-        let pipelines = world.resource::<LensingFieldPipelines>();
+        let Some(pipelines) = world.get_resource::<LensingFieldPipelines>() else {
+            return Ok(());
+        };
         let pipeline_cache = world.resource::<PipelineCache>();
 
         for &id in &[pipelines.pipeline_inject, pipelines.pipeline_advect] {
@@ -182,7 +184,9 @@ impl Plugin for LensingFieldNodePlugin {
             .init_resource::<LensingFieldBindGroups>()
             .add_systems(
                 Render,
-                prepare_lensing_field_bind_groups.in_set(RenderSystems::PrepareBindGroups),
+                prepare_lensing_field_bind_groups
+                    .in_set(RenderSystems::PrepareBindGroups)
+                    .run_if(resource_exists::<LensingFieldPipelines>),
             )
             .add_render_graph_node::<ViewNodeRunner<LensingFieldNode>>(Core2d, LensingFieldLabel)
             // The simulation must finish before the 2D main pass samples the
