@@ -57,6 +57,9 @@ struct LensingDisplay {
     edge_fallback_color: vec4<f32>,
     quantization: QuantizationSettings,
     count: u32,
+    // Physical pixels per art pixel, from the camera projection. Keeps the
+    // pixel grid at a fixed screen-space block size across projection changes.
+    art_pixel_scale: f32,
     lenses: array<LensData, 64>,
 };
 
@@ -190,7 +193,7 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     // displayed art pixel, from the live world-to-pixel conversion (never a
     // hardcoded ratio). The grid is anchored per lens (below), not to the world,
     // so the hole keeps smooth sub-pixel movement while its edge reads as blocks.
-    let cell = px::art_pixel_size(px::world_units_per_pixel(world));
+    let cell = u.art_pixel_scale * px::world_units_per_pixel(world);
 
     var ring_accum = vec3<f32>(0.0);
     var ring_strength = 0.0;

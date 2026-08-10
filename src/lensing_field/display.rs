@@ -74,6 +74,10 @@ struct LensingDisplayUniform {
     quantization: ColorQuantizeUniforms,
     /// Number of populated entries in `lenses`.
     count: u32,
+    /// Physical pixels per art pixel, rounded from the camera projection.
+    /// Passed as a uniform so the pixel grid keeps a fixed screen-space block
+    /// size even when the projection shifts mid-animation.
+    art_pixel_scale: f32,
     lenses: [LensData; MAX_LENSES],
 }
 
@@ -88,6 +92,7 @@ impl Default for LensingDisplayUniform {
             edge_fallback_color: Vec4::ZERO,
             quantization: ColorQuantizeUniforms::default(),
             count: 0,
+            art_pixel_scale: 4.0,
             lenses: [LensData::default(); MAX_LENSES],
         }
     }
@@ -108,7 +113,7 @@ fn prepare_lensing_display_uniforms(
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
 ) {
-    let (clip_from_world, viewport_rect, edge_mirror) = views
+    let (clip_from_world, viewport_rect, edge_mirror, art_pixel_scale) = views
         .iter()
         .next()
         .map(|(ev, cam)| {
@@ -158,9 +163,32 @@ fn prepare_lensing_display_uniforms(
                 _ => Vec4::ZERO,
             };
 
-            (cfworld, vp_rect, mirror)
+            // Art-pixel scale: physical pixels per art pixel, derived from the
+            // orthographic projection width and the physical viewport. Rounding
+            // to an integer gives the same N that `art_pixel_size(wpp)` would
+            // compute on the GPU, but pinned to the CPU-side projection so the
+            // pixel grid keeps a fixed screen-space block size even if the
+            // GPU-derived wpp drifts (e.g. when the projection shifts
+            // mid-animation).
+            let proj_scale_x = ev.clip_from_view.x_axis.x;
+            let art_px = if proj_scale_x.abs() > f32::EPSILON {
+                let area_width = 2.0 / proj_scale_x;
+                let physical_width = cam
+                    .physical_viewport_size
+                    .map_or(area_width, |s| s.x as f32);
+                (physical_width / area_width).round().max(1.0)
+            } else {
+                4.0
+            };
+
+            (cfworld, vp_rect, mirror, art_px)
         })
-        .unwrap_or((Mat4::IDENTITY, Vec4::new(0.0, 0.0, 1.0, 1.0), Vec4::ZERO));
+        .unwrap_or((
+            Mat4::IDENTITY,
+            Vec4::new(0.0, 0.0, 1.0, 1.0),
+            Vec4::ZERO,
+            4.0,
+        ));
 
     let count = extracted.lens_count.min(MAX_LENSES as u32);
     let mut lenses = [LensData::default(); MAX_LENSES];
@@ -182,6 +210,7 @@ fn prepare_lensing_display_uniforms(
         edge_fallback_color: extracted.edge_fallback_color,
         quantization: extracted.ring_quantization,
         count,
+        art_pixel_scale,
         lenses,
     });
     uniforms.buffer.write_buffer(&render_device, &render_queue);
