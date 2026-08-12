@@ -1,7 +1,32 @@
-// msg_shaders - MSG studio shader effects for Bevy.
-// Licensed under MIT OR Apache-2.0 (see LICENSE-MIT / LICENSE-APACHE).
-// Black hole based on Eric Bruneton's black_hole_shader (BSD-3-Clause,
-// see LICENSE-THIRD-PARTY): https://github.com/ebruneton/black_hole_shader
+//! Shader effects for Bevy: black holes, gravitational lensing, palette
+//! quantization, and pixelation.
+//!
+//! # Plugins
+//!
+//! Each effect ships as an independent plugin; add only what you use.
+//!
+//! - [`BlackHolePlugin`] — Schwarzschild black-hole material (accretion disc, photon ring, Doppler
+//!   beaming, relativistic lensing) rendered on a quad. Spawn a [`BlackHole`] component with a
+//!   `Transform`; add [`HoleQuantization`] for a palette-quantized retro look.
+//! - [`LensingHolePlugin`] — screen-space gravitational lensing. A GPU-computed deflection field
+//!   warps the camera's rendered view each frame. Mark your 2D camera with [`LensingHoleCamera`]
+//!   and attach [`LightDeflector`] sources (lens, ring, or line shapes) to entities; an optional
+//!   [`BlackHoleOverlay`] draws a photon ring and event horizon on top of the warp.
+//! - [`ColorQuantizationPlugin`] — nearest-palette color quantization in Oklab space with optional
+//!   Bayer dithering, as a reusable material and a WGSL function library for other shaders.
+//! - [`PixelationPlugin`] — world-anchored pixelation, likewise a material plus a WGSL function
+//!   library.
+//!
+//! # Feature flags
+//!
+//! - `render_2d` (default) — `Mesh2d` materials and the screen-space lensing pipeline.
+//! - `render_3d` — `Mesh3d` variant of the black-hole material.
+//!
+//! # License
+//!
+//! MIT OR Apache-2.0. The black-hole shader derives from Eric Bruneton's
+//! [black_hole_shader](https://github.com/ebruneton/black_hole_shader)
+//! (BSD-3-Clause, see `LICENSE-THIRD-PARTY`).
 
 #[cfg(feature = "render_2d")]
 mod lensing_field;

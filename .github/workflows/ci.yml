@@ -1,0 +1,37 @@
+# CI for msg_shaders as a standalone repository.
+#
+# Inert inside the Gravitaria monorepo (workflows only run from the repo
+# root); copy or keep it at .github/workflows/ci.yml when this crate is
+# published as its own repo. Assumes the repo root is a cargo workspace or
+# single crate containing msg_shaders (and bevy_post_process_2d, see
+# README "Standalone use"). Runs on stable — no nightly features are used.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Docs
+        run: cargo doc --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - name: Tests (includes offline WGSL validation via naga)
+        run: cargo test

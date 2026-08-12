@@ -3,7 +3,9 @@ name = "msg_shaders"
 version = "0.2.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-description = "MSG studio shader effects for Bevy: black holes, color quantization, and pixelation"
+description = "MSG studio shader effects for Bevy: black holes, gravitational lensing, color quantization, and pixelation"
+repository = "https://github.com/ffmulks/gravitaria"
+readme = "README.md"
 keywords = ["bevy", "shader", "blackhole", "quantization", "pixelation"]
 
 [features]
