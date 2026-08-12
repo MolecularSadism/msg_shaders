@@ -78,15 +78,15 @@ cargo run --example lensing
 
 ## Standalone use
 
-This folder is self-contained: its manifests use no workspace inheritance, so
-copying the `msg_shaders/` directory out of the Gravitaria repository gives you
-a buildable crate, with its dependency `bevy_post_process_2d` (a ~100-line
-render-graph ordering helper) nested inside and consumed by path. A
-`Cargo.lock` is committed for reproducible builds.
+This crate is workspace-independent: its manifest uses no workspace
+inheritance, so the folder moves to its own repository as-is. A `Cargo.lock`
+is committed for reproducible builds.
 
-The two crates are separate cargo roots — commands run in this directory cover
-`msg_shaders` only; run `bevy_post_process_2d`'s own tests via
-`cargo test --manifest-path bevy_post_process_2d/Cargo.toml`.
+It has one studio dependency, `msg_post_process_2d` (a ~100-line render-graph
+ordering helper, equally workspace-independent), consumed as
+`path = "../crates/msg_post_process_2d"`. When either crate moves to its own
+repository, redirect that entry to a `git` dependency and refresh the
+lockfile (`cargo generate-lockfile`).
 
 ## Tests
 

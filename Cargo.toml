@@ -1,7 +1,7 @@
-# Workspace-independent manifest: no `workspace = true` inheritance anywhere,
-# so this folder (with the nested bevy_post_process_2d crate) builds standalone
-# when copied out of the Gravitaria repository. Inside the repository both
-# crates are ordinary workspace members.
+# Shared standalone crate: no workspace inheritance, so it can move to its own
+# GitHub repository as-is — the game then redirects its dependency from `path`
+# to `git` in the root [workspace.dependencies], and the msg_post_process_2d
+# path below likewise becomes a `git` dependency.
 
 [package]
 name = "msg_shaders"
@@ -29,7 +29,7 @@ bevy = { version = "0.18", default-features = false, features = [
     "bevy_sprite",
     "bevy_sprite_render",
 ] }
-bevy_post_process_2d = { path = "bevy_post_process_2d" }
+msg_post_process_2d = { path = "../crates/msg_post_process_2d" }
 
 [dev-dependencies]
 # Offline validation of the pure-WGSL compute shaders (no GPU required).

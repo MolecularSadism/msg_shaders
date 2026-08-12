@@ -1174,13 +1174,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bevy_post_process_2d"
-version = "0.1.0"
-dependencies = [
- "bevy",
-]
-
-[[package]]
 name = "bevy_ptr"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3235,11 +3228,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "msg_post_process_2d"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+]
+
+[[package]]
 name = "msg_shaders"
 version = "0.2.0"
 dependencies = [
  "bevy",
- "bevy_post_process_2d",
+ "msg_post_process_2d",
  "naga",
 ]
 

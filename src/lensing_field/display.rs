@@ -36,7 +36,7 @@ use bevy::render::texture::GpuImage;
 use bevy::render::view::{ExtractedView, ViewTarget};
 use bevy::render::{Render, RenderApp, RenderSystems};
 use bevy::shader::Shader;
-use bevy_post_process_2d::PostProcess2dAppExt;
+use msg_post_process_2d::PostProcess2dAppExt;
 
 use crate::lensing_field::extract::ExtractedLensingField;
 use crate::{ColorQuantizeUniforms, LensData, LensingHoleCamera, MAX_LENSES};
