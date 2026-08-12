@@ -1,3 +1,12 @@
+Third-party license notices for msg_shaders
+===========================================
+
+The Schwarzschild black-hole rendering (src/shaders/blackhole_2d.wgsl and the
+derived parameterization in this crate) is based on Eric Bruneton's
+black_hole_shader (https://github.com/ebruneton/black_hole_shader), used under
+the BSD 3-Clause License reproduced below. All other code in this crate is
+licensed under MIT OR Apache-2.0 (see LICENSE-MIT and LICENSE-APACHE).
+
 BSD 3-Clause License
 
 Copyright (c) 2020, Eric Bruneton (original black hole shader)

@@ -1,6 +1,7 @@
 // msg_shaders - MSG studio shader effects for Bevy.
-// Black hole based on Eric Bruneton's black_hole_shader (BSD-3-Clause)
-// https://github.com/ebruneton/black_hole_shader
+// Licensed under MIT OR Apache-2.0 (see LICENSE-MIT / LICENSE-APACHE).
+// Black hole based on Eric Bruneton's black_hole_shader (BSD-3-Clause,
+// see LICENSE-THIRD-PARTY): https://github.com/ebruneton/black_hole_shader
 
 #[cfg(feature = "render_2d")]
 mod lensing_field;
