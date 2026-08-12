@@ -13,7 +13,7 @@
 // world space, matching the field's source lenses.
 
 use bevy::core_pipeline::FullscreenShader;
-use bevy::core_pipeline::core_2d::graph::Node2d;
+use bevy::core_pipeline::core_2d::graph::{Core2d, Node2d};
 use bevy::ecs::query::QueryItem;
 use bevy::prelude::*;
 use bevy::render::camera::ExtractedCamera;
@@ -36,7 +36,7 @@ use bevy::render::texture::GpuImage;
 use bevy::render::view::{ExtractedView, ViewTarget};
 use bevy::render::{Render, RenderApp, RenderSystems};
 use bevy::shader::Shader;
-use msg_post_process_2d::PostProcess2dAppExt;
+use msg_post_process::PostProcessAppExt;
 
 use crate::lensing_field::extract::ExtractedLensingField;
 use crate::{ColorQuantizeUniforms, LensData, LensingHoleCamera, MAX_LENSES};
@@ -441,8 +441,9 @@ impl Plugin for LensingDisplayPlugin {
         // Default placement: a full-screen pass between the main pass and the
         // post-processing stack. The host can additionally order it after a
         // lighting pass so it warps lit pixels — see [`LensingDisplayLabel`].
-        app.add_post_process_2d_node::<LensingDisplayNode>(LensingDisplayLabel);
+        app.add_post_process_node::<LensingDisplayNode>(Core2d, LensingDisplayLabel);
         app.render_between(
+            Core2d,
             LensingDisplayLabel,
             Node2d::EndMainPass,
             Node2d::StartMainPassPostProcessing,

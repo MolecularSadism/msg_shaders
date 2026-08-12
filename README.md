@@ -82,9 +82,9 @@ This crate is workspace-independent: its manifest uses no workspace
 inheritance, so the folder moves to its own repository as-is. A `Cargo.lock`
 is committed for reproducible builds.
 
-It has one studio dependency, `msg_post_process_2d` (a ~100-line render-graph
+It has one studio dependency, `msg_post_process` (a ~100-line render-graph
 ordering helper, equally workspace-independent), consumed as
-`path = "../crates/msg_post_process_2d"`. When either crate moves to its own
+`path = "../crates/msg_post_process"`. When either crate moves to its own
 repository, redirect that entry to a `git` dependency and refresh the
 lockfile (`cargo generate-lockfile`).
 

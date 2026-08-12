@@ -3228,7 +3228,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "msg_post_process_2d"
+name = "msg_post_process"
 version = "0.1.0"
 dependencies = [
  "bevy",
@@ -3239,7 +3239,7 @@ name = "msg_shaders"
 version = "0.2.0"
 dependencies = [
  "bevy",
- "msg_post_process_2d",
+ "msg_post_process",
  "naga",
 ]
 

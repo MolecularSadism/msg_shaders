@@ -3,7 +3,7 @@
 # Inert inside the Gravitaria monorepo (workflows only run from the repo
 # root, and there the parent workspace's CI covers this crate); it becomes
 # active as-is when this folder is published as its own repo. Before that
-# move, redirect the msg_post_process_2d path dependency to `git` and refresh
+# move, redirect the msg_post_process path dependency to `git` and refresh
 # Cargo.lock (see README "Standalone use"). Runs on stable — no nightly
 # features are used.
 

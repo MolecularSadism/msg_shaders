@@ -1,6 +1,6 @@
 # Shared standalone crate: no workspace inheritance, so it can move to its own
 # GitHub repository as-is — the game then redirects its dependency from `path`
-# to `git` in the root [workspace.dependencies], and the msg_post_process_2d
+# to `git` in the root [workspace.dependencies], and the msg_post_process
 # path below likewise becomes a `git` dependency.
 
 [package]
@@ -29,7 +29,7 @@ bevy = { version = "0.18", default-features = false, features = [
     "bevy_sprite",
     "bevy_sprite_render",
 ] }
-msg_post_process_2d = { path = "../crates/msg_post_process_2d" }
+msg_post_process = { path = "../crates/msg_post_process" }
 
 [dev-dependencies]
 # Offline validation of the pure-WGSL compute shaders (no GPU required).
