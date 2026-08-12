@@ -58,6 +58,13 @@ fn setup(mut commands: Commands) {
 Tune the field via the `LensingFieldSettings` resource (force scale, falloff,
 off-screen edge handling).
 
+A runnable version of this — an orbiting black hole warping a tile grid — is
+in [`examples/lensing.rs`](examples/lensing.rs):
+
+```sh
+cargo run --example lensing
+```
+
 ## Feature flags
 
 - `render_2d` (default) — `Mesh2d` materials and the screen-space lensing pipeline
@@ -71,15 +78,15 @@ off-screen edge handling).
 
 ## Standalone use
 
-This crate is developed inside the Gravitaria workspace and inherits two
-dependencies from it. To build it outside that workspace:
+This folder is self-contained: its manifests use no workspace inheritance, so
+copying the `msg_shaders/` directory out of the Gravitaria repository gives you
+a buildable crate, with its dependency `bevy_post_process_2d` (a ~100-line
+render-graph ordering helper) nested inside and consumed by path. A
+`Cargo.lock` is committed for reproducible builds.
 
-1. `bevy = { workspace = true, ... }` → `bevy = { version = "0.18", ... }`
-   (keep `default-features = false` and the listed features).
-2. `bevy_post_process_2d = { workspace = true }` → a `path` or `git`
-   dependency; ship that crate alongside this one (it's a ~100-line
-   render-graph ordering helper).
-3. Replace `[lints] workspace = true` with your own lint table, or delete it.
+The two crates are separate cargo roots — commands run in this directory cover
+`msg_shaders` only; run `bevy_post_process_2d`'s own tests via
+`cargo test --manifest-path bevy_post_process_2d/Cargo.toml`.
 
 ## Tests
 

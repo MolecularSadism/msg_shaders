@@ -1,10 +1,10 @@
 # CI for msg_shaders as a standalone repository.
 #
 # Inert inside the Gravitaria monorepo (workflows only run from the repo
-# root); copy or keep it at .github/workflows/ci.yml when this crate is
-# published as its own repo. Assumes the repo root is a cargo workspace or
-# single crate containing msg_shaders (and bevy_post_process_2d, see
-# README "Standalone use"). Runs on stable — no nightly features are used.
+# root, and there the parent workspace's CI covers both crates); it becomes
+# active as-is when this folder is published as its own repo. The two crates
+# are separate cargo roots (see README "Standalone use"), so each gets its
+# own pass. Runs on stable — no nightly features are used.
 
 name: CI
 
@@ -25,13 +25,24 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # The windowed example builds the full engine; Bevy's default features
+      # need the audio and input system headers on Linux.
+      - name: Install build dependencies
+        run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: |
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo clippy --manifest-path bevy_post_process_2d/Cargo.toml --all-targets -- -D warnings
       - name: Docs
-        run: cargo doc --no-deps
+        run: |
+          cargo doc --locked --no-deps
+          cargo doc --manifest-path bevy_post_process_2d/Cargo.toml --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
+      # Plain `cargo test` so doc tests run too (`--all-targets` would skip them).
       - name: Tests (includes offline WGSL validation via naga)
-        run: cargo test
+        run: |
+          cargo test --locked
+          cargo test --manifest-path bevy_post_process_2d/Cargo.toml
