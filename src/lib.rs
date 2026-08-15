@@ -88,7 +88,11 @@ impl Plugin for BlackHolePlugin {
         app.register_type::<BlackHole>();
         app.register_type::<BlackHoleColors>();
         app.register_type::<BlackHoleGeometry>();
-        app.add_systems(Update, (spawn_blackhole_meshes, update_blackhole_time));
+        app.add_systems(Update, spawn_blackhole_meshes);
+        #[cfg(feature = "render_2d")]
+        app.add_systems(Update, update_blackhole_time_2d);
+        #[cfg(feature = "render_3d")]
+        app.add_systems(Update, update_blackhole_time_3d);
     }
 }
 
@@ -375,7 +379,7 @@ fn spawn_blackhole_meshes(
         commands.entity(entity).insert((
             BlackHoleMesh,
             Mesh3d(mesh_handle.clone()),
-            MeshMaterial3d(material),
+            MeshMaterial3d(material.clone()),
             Transform {
                 translation: transform.translation,
                 rotation: transform.rotation,
@@ -398,7 +402,7 @@ fn spawn_blackhole_meshes(
 }
 
 #[cfg(feature = "render_3d")]
-fn update_blackhole_time(
+fn update_blackhole_time_3d(
     time: Res<Time>,
     mut materials: ResMut<Assets<BlackHoleMaterial>>,
     query: Query<&MeshMaterial3d<BlackHoleMaterial>>,
@@ -413,7 +417,7 @@ fn update_blackhole_time(
 }
 
 #[cfg(feature = "render_2d")]
-fn update_blackhole_time(
+fn update_blackhole_time_2d(
     time: Res<Time>,
     mut materials: ResMut<Assets<BlackHoleMaterial>>,
     query: Query<&MeshMaterial2d<BlackHoleMaterial>>,
