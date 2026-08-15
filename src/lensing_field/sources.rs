@@ -45,6 +45,12 @@ pub const TAG_RING: f32 = 1.0;
 /// Shape tag for a directional band push. See [`DeflectionShape::Line`].
 pub const TAG_LINE: f32 = 2.0;
 
+/// Share of a [`DeflectionShape::Ring`]'s extent each of its edges eases
+/// across — a fraction of `thickness` radially and of `arc` angularly.
+/// Mirrors `RING_EDGE_FADE` in `lensing_field_inject.wgsl`; the two must stay
+/// in step.
+pub const RING_EDGE_FADE: f32 = 0.45;
+
 /// One shape-tagged deflection source, packed for the inject shader's uniform
 /// array. Three 16-byte rows (48 B); the shader reads `tag_strength.x` to
 /// dispatch on shape and unpacks the geometry rows per shape.
@@ -94,10 +100,17 @@ pub enum DeflectionShape {
         inner_radius: f32,
     },
 
-    /// Annular sector pushing radially outward with uniform magnitude inside the
-    /// band and sector. A full explosion ring uses `arc = TAU`; a directional
-    /// force-push fan uses a small arc. Gameplay animates `inner_radius` to make
-    /// the wavefront expand.
+    /// Annular sector pushing radially outward inside the band and sector. A
+    /// full explosion ring uses `arc = TAU`; a directional force-push fan uses
+    /// a small arc. Gameplay animates `inner_radius` to make the wavefront
+    /// expand.
+    ///
+    /// The push holds `strength` across the middle of the band and eases to
+    /// zero over the outermost [`RING_EDGE_FADE`] of it, so it meets the
+    /// surrounding field with a matching slope rather than a step. A band with
+    /// an `inner_radius` eases at that edge too; a disc (`inner_radius == 0`)
+    /// has no inner edge and carries full strength out of its centre. A sector
+    /// (`arc < TAU`) eases across the same share of its sweep at both ends.
     Ring {
         center: Vec2,
         inner_radius: f32,
@@ -377,10 +390,18 @@ mod tests {
         (delta / dist.max(1e-5)) * strength * size * profile
     }
 
+    /// WGSL `smoothstep`: the Hermite ramp between the two edges, clamped
+    /// outside them.
+    fn wgsl_smoothstep(low: f32, high: f32, x: f32) -> f32 {
+        let t = ((x - low) / (high - low)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+
     fn ring_force_ref(world: Vec2, geom_a: Vec4, geom_b: Vec4, strength: f32) -> Vec2 {
         let center = Vec2::new(geom_a.x, geom_a.y);
         let inner = geom_a.z;
         let thick = geom_a.w;
+        let arc = geom_b.y;
         let delta = world - center;
         let dist = delta.length();
         if dist < inner || dist > inner + thick {
@@ -388,10 +409,22 @@ mod tests {
         }
         let ang = delta.y.atan2(delta.x);
         let from_start = wgsl_fract((ang - geom_b.x) / TAU + 1.0) * TAU;
-        if from_start > geom_b.y {
+        if from_start > arc {
             return Vec2::ZERO;
         }
-        (delta / dist.max(1e-5)) * strength
+
+        let across = (dist - inner) / thick.max(1e-5);
+        let mut fade = wgsl_smoothstep(0.0, RING_EDGE_FADE, 1.0 - across);
+        if inner > 0.0 {
+            fade *= wgsl_smoothstep(0.0, RING_EDGE_FADE, across);
+        }
+        if arc < TAU {
+            let ends = (RING_EDGE_FADE * arc).max(1e-5);
+            fade *= wgsl_smoothstep(0.0, ends, from_start)
+                * wgsl_smoothstep(0.0, ends, arc - from_start);
+        }
+
+        (delta / dist.max(1e-5)) * strength * fade
     }
 
     fn line_force_ref(world: Vec2, geom_a: Vec4, geom_b: Vec4, strength: f32) -> Vec2 {
@@ -554,6 +587,136 @@ mod tests {
             ring_force_ref(Vec2::new(9.0, 0.0), src.geom_a, src.geom_b, 7.0),
             Vec2::ZERO
         );
+    }
+
+    /// A disc pushes at full strength out of its centre and eases to nothing
+    /// across its outermost [`RING_EDGE_FADE`], so the push meets the
+    /// surrounding field with a matching slope instead of a step.
+    #[test]
+    fn ring_disc_eases_out_at_its_rim() {
+        let (radius, strength) = (40.0, 5.0);
+        let src = DeflectionShape::Ring {
+            center: Vec2::ZERO,
+            inner_radius: 0.0,
+            thickness: radius,
+            start_angle: 0.0,
+            arc: TAU,
+        }
+        .pack(strength);
+        let at =
+            |d: f32| ring_force_ref(Vec2::new(d, 0.0), src.geom_a, src.geom_b, strength).length();
+
+        // Full strength from the centre out to where the rim fade starts.
+        for r in [0.05, 0.25, 1.0 - RING_EDGE_FADE] {
+            assert!(
+                (at(radius * r) - strength).abs() < 1e-4,
+                "r {r}: {} != {strength}",
+                at(radius * r)
+            );
+        }
+
+        // Strictly decreasing across the fade, and practically nothing at the rim.
+        let mut previous = strength;
+        for step in 1..=10 {
+            let r = 1.0 - RING_EDGE_FADE * (1.0 - step as f32 / 10.0);
+            let current = at(radius * r);
+            assert!(current < previous, "r {r}: {current} >= {previous}");
+            previous = current;
+        }
+        assert!(
+            at(radius * 0.999) < strength * 1e-3,
+            "{}",
+            at(radius * 0.999)
+        );
+        assert_eq!(at(radius), 0.0);
+        assert_eq!(at(radius * 1.5), 0.0);
+    }
+
+    /// The taper is a share of the band, so a wider ring keeps the same shape
+    /// spread over more world units: the same fraction of the way in reads the
+    /// same strength.
+    #[test]
+    fn ring_taper_scales_with_the_band() {
+        let strength = 2.0;
+        let magnitude_at = |thickness: f32, fraction: f32| {
+            let src = DeflectionShape::Ring {
+                center: Vec2::ZERO,
+                inner_radius: 0.0,
+                thickness,
+                start_angle: 0.0,
+                arc: TAU,
+            }
+            .pack(strength);
+            ring_force_ref(
+                Vec2::new(thickness * fraction, 0.0),
+                src.geom_a,
+                src.geom_b,
+                strength,
+            )
+            .length()
+        };
+
+        for fraction in [0.3, 0.7, 0.9, 0.99] {
+            assert!(
+                (magnitude_at(25.0, fraction) - magnitude_at(60.0, fraction)).abs() < 1e-4,
+                "fraction {fraction}: {} != {}",
+                magnitude_at(25.0, fraction),
+                magnitude_at(60.0, fraction)
+            );
+        }
+    }
+
+    /// A band with an inner radius eases at that edge as well — it borders the
+    /// undeflected field on both sides.
+    #[test]
+    fn ring_band_eases_at_its_inner_edge() {
+        let (inner, thickness, strength) = (10.0, 20.0, 3.0);
+        let src = DeflectionShape::Ring {
+            center: Vec2::ZERO,
+            inner_radius: inner,
+            thickness,
+            start_angle: 0.0,
+            arc: TAU,
+        }
+        .pack(strength);
+        let at =
+            |d: f32| ring_force_ref(Vec2::new(d, 0.0), src.geom_a, src.geom_b, strength).length();
+
+        assert!(at(inner + thickness * 0.01) < strength * 0.1);
+        assert!((at(inner + thickness * 0.5) - strength).abs() < 1e-4);
+        assert!(at(inner + thickness * 0.99) < strength * 0.1);
+    }
+
+    /// A sector eases across the same share of its sweep at both ends, so a fan
+    /// has no hard angular edge either.
+    #[test]
+    fn ring_sector_eases_at_its_ends() {
+        let (arc, strength) = (FRAC_PI_2, 4.0);
+        let src = DeflectionShape::Ring {
+            center: Vec2::ZERO,
+            inner_radius: 0.0,
+            thickness: 10.0,
+            start_angle: 0.0,
+            arc,
+        }
+        .pack(strength);
+        let at = |angle: f32| {
+            ring_force_ref(
+                Vec2::from_angle(angle) * 5.0,
+                src.geom_a,
+                src.geom_b,
+                strength,
+            )
+            .length()
+        };
+
+        // Mid-sweep carries the full push; both ends fade out of it.
+        assert!((at(arc * 0.5) - strength).abs() < 1e-4);
+        assert!(at(arc * 0.01) < strength * 0.1);
+        assert!(at(arc * 0.99) < strength * 0.1);
+        // Past either end there is nothing at all.
+        assert_eq!(at(-0.01), 0.0);
+        assert_eq!(at(arc + 0.01), 0.0);
     }
 
     #[test]

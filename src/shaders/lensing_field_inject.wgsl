@@ -7,7 +7,8 @@
 //
 // Each source carries a shape tag (tag_strength.x); the per-cell loop dispatches
 // on it. Case 0 (Lens) is the black-hole Schwarzschild force, identical to the
-// pre-migration loop. Cases 1/2 (Ring/Line) are uniform-push deflection shapes.
+// pre-migration loop. Cases 1/2 (Ring/Line) are edge-tapered and uniform push
+// shapes respectively.
 // Adding a deflection type is one more `fn` + one more `case`.
 //
 // Group 0: shared uniform (settings + source array).
@@ -88,12 +89,26 @@ fn lens_force(world: vec2<f32>, g_a: vec4<f32>, g_b: vec4<f32>, strength: f32) -
     return (delta / max(dist, 1e-5)) * strength * size * profile;
 }
 
-// Uniform outward push inside an annular sector. geom_a = (center.xy, inner,
-// thickness); geom_b = (start_angle, arc). arc = TAU is a closed ring.
+// Share of a ring's extent each of its edges eases across, as a fraction of
+// the band's `thickness` radially and of its `arc` angularly. The push holds
+// full strength across the middle and reaches zero at the edge with a matching
+// slope, so it meets the undeflected field without a step — a step there
+// advects into a hard-edged disc the eye reads as a seam against the rest of
+// the scene.
+const RING_EDGE_FADE: f32 = 0.45;
+
+// Outward push inside an annular sector, easing to zero across the outer
+// `RING_EDGE_FADE` of the band. geom_a = (center.xy, inner, thickness);
+// geom_b = (start_angle, arc). arc = TAU is a closed ring.
+//
+// A band with an inner radius eases at that edge too; a disc (`inner == 0`)
+// has no inner edge to meet the field across, so it carries full strength out
+// of its centre.
 fn ring_force(world: vec2<f32>, g_a: vec4<f32>, g_b: vec4<f32>, strength: f32) -> vec2<f32> {
     let center = g_a.xy;
     let inner  = g_a.z;
     let thick  = g_a.w;
+    let arc    = g_b.y;
     let delta  = world - center;
     let dist   = length(delta);
     if dist < inner || dist > inner + thick {
@@ -103,10 +118,26 @@ fn ring_force(world: vec2<f32>, g_a: vec4<f32>, g_b: vec4<f32>, strength: f32) -
     // CCW angle from the sector start, wrapped to [0, TAU). The + 1.0 keeps the
     // argument positive before fract so a sector spanning the 0-angle seam works.
     let from_start = fract((ang - g_b.x) / TAU + 1.0) * TAU;
-    if from_start > g_b.y {
+    if from_start > arc {
         return vec2<f32>(0.0);
     }
-    return (delta / max(dist, 1e-5)) * strength;
+
+    // Radial taper: 0 at the inner edge of the band, 1 at its rim.
+    let across = (dist - inner) / max(thick, 1e-5);
+    var fade = smoothstep(0.0, RING_EDGE_FADE, 1.0 - across);
+    if inner > 0.0 {
+        fade = fade * smoothstep(0.0, RING_EDGE_FADE, across);
+    }
+
+    // Angular taper across the two ends of a sector. A closed ring has no ends.
+    if arc < TAU {
+        let ends = max(RING_EDGE_FADE * arc, 1e-5);
+        fade = fade
+            * smoothstep(0.0, ends, from_start)
+            * smoothstep(0.0, ends, arc - from_start);
+    }
+
+    return (delta / max(dist, 1e-5)) * strength * fade;
 }
 
 // Uniform directional push inside a band. geom_a = (center.xy, half_length,

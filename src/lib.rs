@@ -43,7 +43,7 @@ pub use lensing_field::{
     display::LensingDisplayLabel,
     sources::{
         DeflectionShape, DeflectionSource, LightDeflectionRequest, LightDeflector,
-        MAX_DEFLECTION_SOURCES,
+        MAX_DEFLECTION_SOURCES, RING_EDGE_FADE,
     },
 };
 pub use material::{BlackHoleMaterial, BlackHoleUniforms, LensData, MAX_LENSES};
@@ -73,6 +73,7 @@ pub mod prelude {
     pub use super::{
         DeflectionShape, DeflectionSource, LENSING_FIELD_RES, LensingFieldPlugin,
         LensingFieldSettings, LightDeflectionRequest, LightDeflector, MAX_DEFLECTION_SOURCES,
+        RING_EDGE_FADE,
     };
 }
 
