@@ -3230,7 +3230,7 @@ dependencies = [
 [[package]]
 name = "msg_post_process"
 version = "0.1.0"
-source = "git+https://github.com/MolecularSadism/msg_post_process?tag=v0.1.0#0be1d41b97fce21be62f038ddd0af3aba7afac4a"
+source = "git+https://github.com/MolecularSadism/msg_post_process?tag=v0.1.0#64411c159f50767513e42e1bd15bec025d8efdce"
 dependencies = [
  "bevy",
 ]

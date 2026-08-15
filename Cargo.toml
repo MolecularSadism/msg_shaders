@@ -8,6 +8,7 @@ description = "MSG studio shader effects for Bevy: black holes, gravitational le
 repository = "https://github.com/MolecularSadism/msg_shaders"
 readme = "README.md"
 keywords = ["bevy", "shader", "blackhole", "quantization", "pixelation"]
+categories = ["game-development", "rendering", "graphics"]
 
 [features]
 default = ["render_2d"]
