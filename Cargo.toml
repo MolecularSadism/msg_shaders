@@ -25,7 +25,7 @@ bevy = { version = "0.18", default-features = false, features = [
     "bevy_sprite",
     "bevy_sprite_render",
 ] }
-msg_post_process = { git = "https://github.com/MolecularSadism/msg_post_process", branch = "main" }
+msg_post_process = { git = "https://github.com/MolecularSadism/msg_post_process", tag = "v0.1.0" }
 
 [dev-dependencies]
 # Offline validation of the pure-WGSL compute shaders (no GPU required).
