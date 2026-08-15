@@ -98,8 +98,8 @@ small render-graph ordering helper, itself pulled in as a `git` dependency. A
 ## Tests
 
 `cargo test` validates all WGSL shaders offline via naga (no GPU needed) and
-runs the unit tests. CI runs the studio's shared Bevy 0.18 pipeline
-(`.github/workflows/ci.yaml`).
+runs the unit tests. The same checks run in CI
+(`.github/workflows/ci.yml`).
 
 ## License
 
