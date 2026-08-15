@@ -1,5 +1,10 @@
 # msg_shaders
 
+[![CI](https://github.com/MolecularSadism/msg_shaders/workflows/CI/badge.svg)](https://github.com/MolecularSadism/msg_shaders/actions)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/MolecularSadism/msg_shaders#license)
+[![Bevy](https://img.shields.io/badge/Bevy-0.18-blue.svg)](https://bevyengine.org/)
+[![Rust](https://img.shields.io/badge/rust-2024%20edition-orange.svg)](https://www.rust-lang.org/)
+
 Shader effects for [Bevy](https://bevyengine.org): black holes, gravitational
 lensing, palette quantization, and pixelation. Built for
 [Gravitaria](https://github.com/ffmulks/gravitaria) and shared as-is — APIs
@@ -76,23 +81,25 @@ cargo run --example lensing
 |-------------|------|------|
 | 0.2 | 0.18 | 1.85+ (edition 2024) |
 
-## Standalone use
+## Installation
 
-This crate is workspace-independent: its manifest uses no workspace
-inheritance, so the folder moves to its own repository as-is. A `Cargo.lock`
-is committed for reproducible builds.
+Not yet on crates.io — depend on the repository:
 
-It has one studio dependency, `msg_post_process` (a ~100-line render-graph
-ordering helper, equally workspace-independent), consumed as
-`path = "../crates/msg_post_process"`. When either crate moves to its own
-repository, redirect that entry to a `git` dependency and refresh the
-lockfile (`cargo generate-lockfile`).
+```toml
+[dependencies]
+msg_shaders = { git = "https://github.com/MolecularSadism/msg_shaders", branch = "main" }
+```
+
+The one studio dependency is
+[`msg_post_process`](https://github.com/MolecularSadism/msg_post_process), a
+small render-graph ordering helper, itself pulled in as a `git` dependency. A
+`Cargo.lock` is committed for reproducible builds.
 
 ## Tests
 
 `cargo test` validates all WGSL shaders offline via naga (no GPU needed) and
-runs the unit tests. A ready-made GitHub Actions workflow for standalone repos
-is in `.github/workflows/ci.yml`.
+runs the unit tests. CI runs the studio's shared Bevy 0.18 pipeline
+(`.github/workflows/ci.yaml`).
 
 ## License
 

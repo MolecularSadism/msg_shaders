@@ -1,15 +1,11 @@
-# Shared standalone crate: no workspace inheritance, so it can move to its own
-# GitHub repository as-is — the game then redirects its dependency from `path`
-# to `git` in the root [workspace.dependencies], and the msg_post_process
-# path below likewise becomes a `git` dependency.
-
 [package]
 name = "msg_shaders"
 version = "0.2.0"
 edition = "2024"
+authors = ["ffmulks <63452434+ffmulks@users.noreply.github.com>"]
 license = "MIT OR Apache-2.0"
 description = "MSG studio shader effects for Bevy: black holes, gravitational lensing, color quantization, and pixelation"
-repository = "https://github.com/ffmulks/gravitaria"
+repository = "https://github.com/MolecularSadism/msg_shaders"
 readme = "README.md"
 keywords = ["bevy", "shader", "blackhole", "quantization", "pixelation"]
 
@@ -29,7 +25,7 @@ bevy = { version = "0.18", default-features = false, features = [
     "bevy_sprite",
     "bevy_sprite_render",
 ] }
-msg_post_process = { path = "../crates/msg_post_process" }
+msg_post_process = { git = "https://github.com/MolecularSadism/msg_post_process", branch = "main" }
 
 [dev-dependencies]
 # Offline validation of the pure-WGSL compute shaders (no GPU required).

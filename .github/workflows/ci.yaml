@@ -1,0 +1,18 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  # `publish-checks` stays off while `msg_post_process` is a git dependency:
+  # crates.io rejects git deps, so `cargo publish --dry-run` cannot pass. Enable
+  # it once that dependency carries a published version.
+  ci:
+    uses: MolecularSadism/msg_ci_templates/.github/workflows/bevy-0.18-ci.yaml@main

@@ -1,0 +1,6 @@
+* text=auto
+
+# WGSL/GLSL shader sources are text; keep them normalized like the Rust sources.
+*.wgsl text
+*.vert text
+*.frag text
