@@ -16,3 +16,8 @@ jobs:
   # it once that dependency carries a published version.
   ci:
     uses: MolecularSadism/msg_ci_templates/.github/workflows/bevy-0.18-ci.yaml@main
+    with:
+      # The lensing example and the naga dev-dependency build Bevy with its
+      # default features, which need the audio, input, and Wayland headers.
+      apt-packages: >-
+        libasound2-dev libudev-dev libwayland-dev
