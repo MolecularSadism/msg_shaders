@@ -123,12 +123,10 @@ fn find_nearest_palette_color(
 ) -> vec3<f32> {
     let oklab = linear_rgb_to_oklab(color);
 
-    // Apply dither offset to the lightness channel
-    let dithered_oklab = vec3<f32>(
-        oklab.x + dither_offset * 0.1,
-        oklab.y,
-        oklab.z
-    );
+    // Apply the dither offset to all three Oklab channels, not just
+    // lightness — a palette boundary that differs mainly in hue/chroma (a/b)
+    // would otherwise get no dither at all and render as a hard edge.
+    let dithered_oklab = oklab + vec3<f32>(dither_offset * 0.1);
 
     var best_distance = 1000000.0;
     var best_color = vec3<f32>(0.0, 0.0, 0.0);
@@ -154,16 +152,17 @@ fn find_nearest_palette_color(
 /// with one fetch — no sampler, so the unfilterable `Rgba32Float` LUT needs no
 /// filtering-sampler binding and the read is always the exact stored entry.
 ///
-/// Dithering is preserved exactly: the offset is applied to Oklab lightness and
-/// converted back to linear RGB before the lookup, so only the nearest search is
-/// approximated (to the LUT's cell resolution), not the dither.
+/// Dithering is preserved exactly: the offset is applied to all three Oklab
+/// channels and converted back to linear RGB before the lookup, so only the
+/// nearest search is approximated (to the LUT's cell resolution), not the
+/// dither.
 fn find_nearest_palette_color_lut(
     color: vec3<f32>,
     dither_offset: f32,
     lut: texture_3d<f32>,
 ) -> vec3<f32> {
     let oklab = linear_rgb_to_oklab(color);
-    let dithered_oklab = vec3<f32>(oklab.x + dither_offset * 0.1, oklab.y, oklab.z);
+    let dithered_oklab = oklab + vec3<f32>(dither_offset * 0.1);
     let dithered_rgb = oklab_to_linear_rgb(dithered_oklab);
 
     // Integer index of the cell containing the (clamped) color. `floor(c * dims)`
