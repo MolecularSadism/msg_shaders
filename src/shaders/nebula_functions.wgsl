@@ -54,39 +54,38 @@ fn fbm(p: vec2<f32>, octaves: u32) -> f32 {
     return value / max(total, 1e-5);
 }
 
-// Nebula emission color (linear RGB, HDR-capable) at pattern position `p`.
-// Domain-warps the cloud field into wispy filaments, tints between two palette
-// colors by a low-frequency hue field, and adds brighter cores at dense knots.
+// Cloud density in [0, 1] for one nebula layer at pattern position `p`.
+// Domain-warps the field into wispy filaments, then a smoothstep band sets the
+// cloud contrast. Callers map this density through a color ramp and composite.
 //
-// `octaves` sets the cloud fbm detail; `warp_octaves` the domain-warp and hue
-// fields. `warp_strength` is how far the warp displaces the cloud lookup, and
-// `cloud_low`/`cloud_high` are the smoothstep band that sets cloud contrast.
-fn nebula_color(
+// `octaves` is the cloud fbm detail; `warp_octaves` the domain-warp detail;
+// `warp_strength` how far the warp displaces the lookup; `cloud_low`/`cloud_high`
+// the smoothstep band.
+fn nebula_density(
     p: vec2<f32>,
-    color_a: vec3<f32>,
-    color_b: vec3<f32>,
-    background: vec3<f32>,
-    density: f32,
     octaves: u32,
     warp_octaves: u32,
     warp_strength: f32,
     cloud_low: f32,
     cloud_high: f32,
-) -> vec3<f32> {
+) -> f32 {
     let warp = vec2<f32>(
         fbm(p + vec2<f32>(1.7, 9.2), warp_octaves),
         fbm(p + vec2<f32>(8.3, 2.8), warp_octaves),
     );
     let q = p + (warp - 0.5) * warp_strength;
+    let clouds = fbm(q, octaves);
+    return smoothstep(cloud_low, cloud_high, clouds);
+}
 
-    var clouds = fbm(q, octaves);
-    clouds = smoothstep(cloud_low, cloud_high, clouds) * density;
-
-    let hue = clamp(fbm(p * 0.5 + vec2<f32>(4.0, 4.0), warp_octaves), 0.0, 1.0);
-    let tint = mix(color_a, color_b, hue);
-
-    let core = pow(clouds, 2.0) * 0.6;
-    return background + tint * clouds + tint * core;
+// Three-stop color ramp c1 -> c2 -> c3 sampled at `t` in [0, 1]. c1 is the faint
+// edge, c2 the body, c3 the bright core.
+fn ramp3(t: f32, c1: vec3<f32>, c2: vec3<f32>, c3: vec3<f32>) -> vec3<f32> {
+    let x = clamp(t, 0.0, 1.0);
+    if x < 0.5 {
+        return mix(c1, c2, x * 2.0);
+    }
+    return mix(c2, c3, (x - 0.5) * 2.0);
 }
 
 // Additive emission from one star layer for the art-pixel at integer coordinate

@@ -34,8 +34,7 @@ fn palette() -> Vec<[f32; 4]> {
         [0xc1, 0xff, 0xe2],
         [0xff, 0xfc, 0xfc],
     ];
-    srgb
-        .iter()
+    srgb.iter()
         .map(|[r, g, b]| {
             let lin = Color::srgb_u8(*r, *g, *b).to_linear();
             [lin.red, lin.green, lin.blue, 1.0]
@@ -49,9 +48,48 @@ fn setup(mut commands: Commands) {
         Nebula {
             size: Vec2::splat(1400.0),
             palette: palette(),
-            nebula_scale: 0.010,
-            star_spacing: 8.0,
-            star_density: 0.6,
+            background: [0.03, 0.02, 0.08, 1.0],
+            // Two cloud layers pulling different color ramps, composited over.
+            layers: vec![
+                NebulaLayer {
+                    colors: [
+                        [0.10, 0.05, 0.25, 1.0],
+                        [0.35, 0.12, 0.55, 1.0],
+                        [0.55, 0.75, 1.00, 1.0],
+                    ],
+                    scale: 0.006,
+                    intensity: 0.9,
+                    parallax: 0.10,
+                    ..default()
+                },
+                NebulaLayer {
+                    colors: [
+                        [0.06, 0.14, 0.30, 1.0],
+                        [0.12, 0.45, 0.55, 1.0],
+                        [1.00, 0.85, 0.50, 1.0],
+                    ],
+                    scale: 0.016,
+                    cloud_low: 0.5,
+                    intensity: 0.6,
+                    parallax: 0.2,
+                    offset: Vec2::new(400.0, -250.0),
+                    ..default()
+                },
+            ],
+            stars: vec![
+                StarLayer {
+                    spacing: 8.0,
+                    parallax: 0.14,
+                    ..default()
+                },
+                StarLayer {
+                    spacing: 16.0,
+                    density: 0.4,
+                    brightness: 1.3,
+                    parallax: 0.24,
+                    seed: 5.0,
+                },
+            ],
             // Fix the art-pixel size so the demo is chunky without a
             // pixel-perfect game camera driving the zoom.
             pixel_size: 3.0,
@@ -61,11 +99,11 @@ fn setup(mut commands: Commands) {
     ));
 }
 
-/// Slowly rotate and drift the sky so the twinkle and motion are visible.
+/// Slowly rotate and drift the sky so the twinkle and parallax are visible.
 fn drift(time: Res<Time>, mut q: Query<&mut Nebula>) {
     let t = time.elapsed_secs();
     for mut nebula in &mut q {
         nebula.rotation = t * 0.02;
-        nebula.scroll = Vec2::new(t * 6.0, t * 2.0);
+        nebula.scroll = Vec2::new(t * 30.0, t * 12.0);
     }
 }

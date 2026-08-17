@@ -65,10 +65,11 @@ pub use pixelate::{
     PixelationPlugin, QuantizePixelateMaterial,
 };
 
-// Nebula + twinkling starfield background.
+// Layered nebula + twinkling starfield background.
 pub use nebula::{
-    NEBULA_FUNCTIONS_SHADER_HANDLE, Nebula, NebulaColors, NebulaMaterial, NebulaPlugin,
-    NebulaUniforms,
+    MAX_NEBULA_LAYERS, MAX_STAR_LAYERS, NEBULA_FUNCTIONS_SHADER_HANDLE, Nebula, NebulaBlend,
+    NebulaLayer, NebulaLayerUniform, NebulaMaterial, NebulaPlugin, NebulaUniforms, StarLayer,
+    StarLayerUniform,
 };
 
 pub mod prelude {
@@ -76,9 +77,10 @@ pub mod prelude {
         BlackHole, BlackHoleColors, BlackHoleGeometry, BlackHoleOverlay, BlackHolePlugin,
         BlackHoleQuantization, ColorQuantizationPlugin, ColorQuantizeMaterial,
         ColorQuantizeUniforms, DitherPattern, HoleQuantization, LensingHoleCamera,
-        LensingHolePlugin, MAX_PALETTE_COLORS, Nebula, NebulaColors, NebulaMaterial, NebulaPlugin,
-        PixelateConfig, PixelateMaterial, PixelationPlugin, QuantizationConfig,
-        QuantizePixelateMaterial, lens_capture_extent,
+        LensingHolePlugin, MAX_NEBULA_LAYERS, MAX_PALETTE_COLORS, MAX_STAR_LAYERS, Nebula,
+        NebulaBlend, NebulaLayer, NebulaMaterial, NebulaPlugin, PixelateConfig, PixelateMaterial,
+        PixelationPlugin, QuantizationConfig, QuantizePixelateMaterial, StarLayer,
+        lens_capture_extent,
     };
     #[cfg(feature = "render_2d")]
     pub use super::{
