@@ -16,6 +16,7 @@ track the game's needs.
 | Gravitational lensing | `LensingHolePlugin` | Screen-space warp of the camera's view, driven by a GPU-simulated deflection field. Generic `LightDeflector` sources (lens / ring / line); optional `BlackHoleOverlay` photon-ring + event-horizon discs. |
 | Color quantization | `ColorQuantizationPlugin` | Nearest-palette quantization in Oklab space with Bayer dithering — a material plus a WGSL function library other shaders can `#import`. |
 | Pixelation | `PixelationPlugin` | World-anchored pixelation — material plus WGSL function library. |
+| Nebula + starfield | `NebulaPlugin` | Procedural nebula clouds and a twinkling star field on a quad, snapped to the art-pixel grid and reduced to a palette with dithering. Stars pulse in brightness (winking fully dark) and shift color over time. Reuses the quantization and pixelation modules. |
 
 ## Quick start
 
@@ -62,6 +63,39 @@ fn setup(mut commands: Commands) {
 
 Tune the field via the `LensingFieldSettings` resource (force scale, falloff,
 off-screen edge handling).
+
+Nebula + twinkling starfield background on a quad:
+
+```rust
+use bevy::prelude::*;
+use msg_shaders::prelude::*;
+
+fn main() {
+    App::new()
+        .add_plugins((DefaultPlugins, NebulaPlugin))
+        .add_systems(Startup, |mut commands: Commands| {
+            commands.spawn(Camera2d);
+            commands.spawn((
+                Nebula {
+                    // Linear-RGB palette; empty leaves the clouds un-quantized.
+                    palette: vec![[0.05, 0.03, 0.1, 1.0], [0.35, 0.12, 0.55, 1.0], [1.0, 1.0, 1.0, 1.0]],
+                    ..default()
+                },
+                Transform::default(),
+            ));
+        })
+        .run();
+}
+```
+
+Set `Nebula::pixel_size` to `0.0` (the default) to derive the art-pixel size
+from screen derivatives — pixel-perfect and zoom-tracking. `scroll` drifts the
+pattern (parallax) and `rotation` spins the sky (day/night). A runnable version
+is in [`examples/nebula.rs`](examples/nebula.rs):
+
+```sh
+cargo run --example nebula
+```
 
 A runnable version of this — an orbiting black hole warping a tile grid — is
 in [`examples/lensing.rs`](examples/lensing.rs):
