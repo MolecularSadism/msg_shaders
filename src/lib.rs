@@ -16,6 +16,9 @@
 //!   Bayer dithering, as a reusable material and a WGSL function library for other shaders.
 //! - [`PixelationPlugin`] — world-anchored pixelation, likewise a material plus a WGSL function
 //!   library.
+//! - [`NebulaPlugin`] — a procedural nebula + twinkling starfield background. Attach a [`Nebula`]
+//!   component to a quad; the clouds and stars are snapped to the art-pixel grid and reduced to a
+//!   palette with dithering, reusing the quantization and pixelation modules above.
 //!
 //! # Feature flags
 //!
@@ -31,6 +34,7 @@
 #[cfg(feature = "render_2d")]
 mod lensing_field;
 mod material;
+mod nebula;
 mod pixelate;
 mod quantize;
 mod quantize_material;
@@ -61,13 +65,22 @@ pub use pixelate::{
     PixelationPlugin, QuantizePixelateMaterial,
 };
 
+// Layered nebula + twinkling starfield background.
+pub use nebula::{
+    MAX_NEBULA_LAYERS, MAX_STAR_LAYERS, NEBULA_FUNCTIONS_SHADER_HANDLE, Nebula, NebulaBlend,
+    NebulaLayer, NebulaLayerUniform, NebulaMaterial, NebulaPlugin, NebulaUniforms, StarLayer,
+    StarLayerUniform,
+};
+
 pub mod prelude {
     pub use super::{
         BlackHole, BlackHoleColors, BlackHoleGeometry, BlackHoleOverlay, BlackHolePlugin,
         BlackHoleQuantization, ColorQuantizationPlugin, ColorQuantizeMaterial,
         ColorQuantizeUniforms, DitherPattern, HoleQuantization, LensingHoleCamera,
-        LensingHolePlugin, MAX_PALETTE_COLORS, PixelateConfig, PixelateMaterial, PixelationPlugin,
-        QuantizationConfig, QuantizePixelateMaterial, lens_capture_extent,
+        LensingHolePlugin, MAX_NEBULA_LAYERS, MAX_PALETTE_COLORS, MAX_STAR_LAYERS, Nebula,
+        NebulaBlend, NebulaLayer, NebulaMaterial, NebulaPlugin, PixelateConfig, PixelateMaterial,
+        PixelationPlugin, QuantizationConfig, QuantizePixelateMaterial, StarLayer,
+        lens_capture_extent,
     };
     #[cfg(feature = "render_2d")]
     pub use super::{

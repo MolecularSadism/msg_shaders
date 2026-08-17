@@ -30,3 +30,17 @@ fn lensing_field_advect_is_valid_wgsl() {
         include_str!("../src/shaders/lensing_field_advect.wgsl"),
     );
 }
+
+#[test]
+fn nebula_functions_is_valid_wgsl() {
+    // The function library body is pure WGSL, so naga can validate the noise,
+    // nebula, and star math offline once the Bevy `#define_import_path`
+    // directive is stripped. The material shader that imports it is validated by
+    // the pipeline at runtime, like the other `#import`-based materials.
+    let src: String = include_str!("../src/shaders/nebula_functions.wgsl")
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    validate("nebula_functions", &src);
+}

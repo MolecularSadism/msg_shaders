@@ -16,6 +16,7 @@ track the game's needs.
 | Gravitational lensing | `LensingHolePlugin` | Screen-space warp of the camera's view, driven by a GPU-simulated deflection field. Generic `LightDeflector` sources (lens / ring / line); optional `BlackHoleOverlay` photon-ring + event-horizon discs. |
 | Color quantization | `ColorQuantizationPlugin` | Nearest-palette quantization in Oklab space with Bayer dithering — a material plus a WGSL function library other shaders can `#import`. |
 | Pixelation | `PixelationPlugin` | World-anchored pixelation — material plus WGSL function library. |
+| Nebula + starfield | `NebulaPlugin` | A stack of procedural nebula cloud layers (each its own noise, three-stop color ramp, and parallax) composited over a base color, plus a stack of twinkling star layers. Snapped to the art-pixel grid and reduced to a palette with dithering; stars pulse (winking fully dark) and shift color over time. Reuses the quantization and pixelation modules. |
 
 ## Quick start
 
@@ -62,6 +63,45 @@ fn setup(mut commands: Commands) {
 
 Tune the field via the `LensingFieldSettings` resource (force scale, falloff,
 off-screen edge handling).
+
+Layered nebula + twinkling starfield background on a quad:
+
+```rust
+use bevy::prelude::*;
+use msg_shaders::prelude::*;
+
+fn main() {
+    App::new()
+        .add_plugins((DefaultPlugins, NebulaPlugin))
+        .add_systems(Startup, |mut commands: Commands| {
+            commands.spawn(Camera2d);
+            commands.spawn((
+                Nebula {
+                    // Two cloud layers + two star layers by default; override
+                    // `layers` / `stars` for a custom stack. Linear-RGB palette;
+                    // empty leaves the clouds un-quantized.
+                    palette: vec![[0.05, 0.03, 0.1, 1.0], [0.35, 0.12, 0.55, 1.0], [1.0, 1.0, 1.0, 1.0]],
+                    ..default()
+                },
+                Transform::default(),
+            ));
+        })
+        .run();
+}
+```
+
+Each [`NebulaLayer`] carries its own noise settings, a three-stop color ramp
+(`c1` edge → `c2` body → `c3` core), and a `parallax` factor; layers composite
+back-to-front, `Over` (default) or `Additive`. [`StarLayer`]s likewise carry
+their own spacing/density/parallax. Set `Nebula::pixel_size` to `0.0` (the
+default) to derive the art-pixel size from screen derivatives — pixel-perfect and
+zoom-tracking. Set `scroll` to the camera's world position each frame; each layer
+multiplies it by its own parallax factor. `rotation` spins the whole sky. A
+runnable version is in [`examples/nebula.rs`](examples/nebula.rs):
+
+```sh
+cargo run --example nebula
+```
 
 A runnable version of this — an orbiting black hole warping a tile grid — is
 in [`examples/lensing.rs`](examples/lensing.rs):
