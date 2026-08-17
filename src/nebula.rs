@@ -88,6 +88,16 @@ pub struct Nebula {
     pub nebula_scale: f32,
     /// Overall cloud density / contrast.
     pub density: f32,
+    /// fbm octaves for the cloud field. Clamped to `1..=8`.
+    pub octaves: u32,
+    /// fbm octaves for the domain-warp and hue fields. Clamped to `1..=8`.
+    pub warp_octaves: u32,
+    /// How far the domain warp displaces the cloud lookup (wispiness).
+    pub warp_strength: f32,
+    /// Lower edge of the cloud smoothstep band. Raising it thins the clouds.
+    pub cloud_low: f32,
+    /// Upper edge of the cloud smoothstep band. Widening the band softens them.
+    pub cloud_high: f32,
     /// Fraction of star blocks that contain a star (0-1).
     pub star_density: f32,
     /// Art-pixels between star slots on the densest layer.
@@ -96,6 +106,10 @@ pub struct Nebula {
     pub star_brightness: f32,
     /// Twinkle rate (radians per second, scaled per star).
     pub twinkle_speed: f32,
+    /// Exponent sharpening the twinkle pulse; higher = brief, sparkly flashes.
+    pub twinkle_sharpness: f32,
+    /// Oscillation value below which a star winks fully dark (0 disables).
+    pub star_blackout: f32,
     /// Pattern drift offset in world units (parallax / slow motion).
     pub scroll: Vec2,
     /// Pattern rotation in radians (e.g. a day/night sky angle).
@@ -116,10 +130,17 @@ impl Default for Nebula {
             dither_pattern: 1,
             nebula_scale: 0.006,
             density: 1.0,
+            octaves: 5,
+            warp_octaves: 4,
+            warp_strength: 3.0,
+            cloud_low: 0.30,
+            cloud_high: 0.85,
             star_density: 0.55,
             star_spacing: 9.0,
             star_brightness: 1.6,
             twinkle_speed: 2.0,
+            twinkle_sharpness: 3.0,
+            star_blackout: 0.12,
             scroll: Vec2::ZERO,
             rotation: 0.0,
             pixel_size: 0.0,
@@ -149,8 +170,16 @@ impl Nebula {
             time,
             pixel_size: self.pixel_size,
             seed: self.seed,
+            octaves: self.octaves.clamp(1, 8),
+            warp_octaves: self.warp_octaves.clamp(1, 8),
+            warp_strength: self.warp_strength,
+            cloud_low: self.cloud_low,
+            cloud_high: self.cloud_high,
+            twinkle_sharpness: self.twinkle_sharpness,
+            star_blackout: self.star_blackout,
             _pad0: 0.0,
             _pad1: 0.0,
+            _pad2: 0.0,
         }
     }
 
@@ -196,8 +225,16 @@ pub struct NebulaUniforms {
     pub time: f32,
     pub pixel_size: f32,
     pub seed: f32,
+    pub octaves: u32,
+    pub warp_octaves: u32,
+    pub warp_strength: f32,
+    pub cloud_low: f32,
+    pub cloud_high: f32,
+    pub twinkle_sharpness: f32,
+    pub star_blackout: f32,
     pub _pad0: f32,
     pub _pad1: f32,
+    pub _pad2: f32,
 }
 
 /// Material that renders the procedural nebula + starfield.
@@ -345,5 +382,17 @@ mod tests {
             ..Default::default()
         };
         assert!(nebula.to_uniforms(0.0).star_spacing >= 1.0);
+    }
+
+    #[test]
+    fn octaves_are_clamped() {
+        let nebula = Nebula {
+            octaves: 99,
+            warp_octaves: 0,
+            ..Default::default()
+        };
+        let u = nebula.to_uniforms(0.0);
+        assert_eq!(u.octaves, 8);
+        assert_eq!(u.warp_octaves, 1);
     }
 }

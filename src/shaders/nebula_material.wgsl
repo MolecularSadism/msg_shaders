@@ -29,8 +29,16 @@ struct NebulaSettings {
     time: f32,
     pixel_size: f32,
     seed: f32,
+    octaves: u32,
+    warp_octaves: u32,
+    warp_strength: f32,
+    cloud_low: f32,
+    cloud_high: f32,
+    twinkle_sharpness: f32,
+    star_blackout: f32,
     _pad0: f32,
     _pad1: f32,
+    _pad2: f32,
 };
 
 @group(2) @binding(0)
@@ -77,18 +85,24 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         nebula.color_b.rgb,
         nebula.background.rgb,
         nebula.density,
+        nebula.octaves,
+        nebula.warp_octaves,
+        nebula.warp_strength,
+        nebula.cloud_low,
+        nebula.cloud_high,
     );
 
     // Two star layers of differing spacing for a hint of depth.
     color += nb::star_layer(
         cell, nebula.star_spacing, nebula.time, nebula.seed,
         nebula.twinkle_speed, nebula.star_cool.rgb, nebula.star_warm.rgb,
-        nebula.star_density,
+        nebula.star_density, nebula.twinkle_sharpness, nebula.star_blackout,
     ) * nebula.star_brightness;
     color += nb::star_layer(
         cell + vec2<f32>(131.0, 71.0), nebula.star_spacing * 1.9, nebula.time,
         nebula.seed + 17.0, nebula.twinkle_speed * 0.8, nebula.star_cool.rgb,
         nebula.star_warm.rgb, nebula.star_density * 0.7,
+        nebula.twinkle_sharpness, nebula.star_blackout,
     ) * nebula.star_brightness * 0.75;
 
     if quantization.palette_size == 0u {

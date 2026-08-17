@@ -57,23 +57,32 @@ fn fbm(p: vec2<f32>, octaves: u32) -> f32 {
 // Nebula emission color (linear RGB, HDR-capable) at pattern position `p`.
 // Domain-warps the cloud field into wispy filaments, tints between two palette
 // colors by a low-frequency hue field, and adds brighter cores at dense knots.
+//
+// `octaves` sets the cloud fbm detail; `warp_octaves` the domain-warp and hue
+// fields. `warp_strength` is how far the warp displaces the cloud lookup, and
+// `cloud_low`/`cloud_high` are the smoothstep band that sets cloud contrast.
 fn nebula_color(
     p: vec2<f32>,
     color_a: vec3<f32>,
     color_b: vec3<f32>,
     background: vec3<f32>,
     density: f32,
+    octaves: u32,
+    warp_octaves: u32,
+    warp_strength: f32,
+    cloud_low: f32,
+    cloud_high: f32,
 ) -> vec3<f32> {
     let warp = vec2<f32>(
-        fbm(p + vec2<f32>(1.7, 9.2), 4u),
-        fbm(p + vec2<f32>(8.3, 2.8), 4u),
+        fbm(p + vec2<f32>(1.7, 9.2), warp_octaves),
+        fbm(p + vec2<f32>(8.3, 2.8), warp_octaves),
     );
-    let q = p + (warp - 0.5) * 3.0;
+    let q = p + (warp - 0.5) * warp_strength;
 
-    var clouds = fbm(q, 5u);
-    clouds = smoothstep(0.30, 0.85, clouds) * density;
+    var clouds = fbm(q, octaves);
+    clouds = smoothstep(cloud_low, cloud_high, clouds) * density;
 
-    let hue = clamp(fbm(p * 0.5 + vec2<f32>(4.0, 4.0), 3u), 0.0, 1.0);
+    let hue = clamp(fbm(p * 0.5 + vec2<f32>(4.0, 4.0), warp_octaves), 0.0, 1.0);
     let tint = mix(color_a, color_b, hue);
 
     let core = pow(clouds, 2.0) * 0.6;
@@ -94,6 +103,8 @@ fn star_layer(
     color_cool: vec3<f32>,
     color_warm: vec3<f32>,
     density: f32,
+    twinkle_sharpness: f32,
+    star_blackout: f32,
 ) -> vec3<f32> {
     let block = floor(cell / spacing);
     let rnd = hash22(block + vec2<f32>(seed, seed * 1.7 + 3.1));
@@ -113,8 +124,8 @@ fn star_layer(
     let phase = rnd.x * NB_TAU;
     let rate = twinkle_speed * (0.5 + rnd.y);
     let osc = 0.5 + 0.5 * sin(time * rate + phase);
-    let spark = pow(osc, 3.0);
-    let alive = step(0.12, osc);
+    let spark = pow(osc, twinkle_sharpness);
+    let alive = step(star_blackout, osc);
     let base = 0.55 + 0.45 * rnd2.y;
     let intensity = base * spark * alive;
 
