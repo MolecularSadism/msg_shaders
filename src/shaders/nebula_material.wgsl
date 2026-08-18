@@ -80,19 +80,20 @@ var<uniform> quantization: QuantizationSettings;
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
-    let world = in.world_position.xy;
+    // Bounded pattern coordinate local to the quad, with the global rotation
+    // (e.g. a day/night sky) applied once. Computed before `aps` below so the
+    // pixel-size derivative reads this translation-independent magnitude
+    // instead of the raw world position, which can be arbitrarily large (and
+    // so lose derivative precision) far from the world origin.
+    let local = (in.uv - vec2<f32>(0.5, 0.5)) * nebula.world_size;
+    let base = px::rotate2d(local, nebula.rotation);
 
     // World units per art pixel: pixel-perfect from screen derivatives (tracks
     // zoom), or an explicit override. The branch is on a uniform.
     var aps = nebula.pixel_size;
     if aps <= 0.0 {
-        aps = px::art_pixel_size(px::world_units_per_pixel(world));
+        aps = px::art_pixel_size(px::world_units_per_pixel(base));
     }
-
-    // Bounded pattern coordinate local to the quad, with the global rotation
-    // (e.g. a day/night sky) applied once.
-    let local = (in.uv - vec2<f32>(0.5, 0.5)) * nebula.world_size;
-    let base = px::rotate2d(local, nebula.rotation);
 
     // One dither grid for the whole image (parallax-independent), so blocks
     // quantize consistently.

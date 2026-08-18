@@ -75,18 +75,32 @@ fn oklab_to_linear_rgb(c: vec3<f32>) -> vec3<f32> {
     );
 }
 
+/// Non-negative remainder of `v / n` (floored division), computed entirely in
+/// float space so it is correct for any `v` — negative, huge, or tiny —
+/// without ever casting an out-of-range value to `u32`. `u32(v) % n` (the
+/// previous approach) relied on callers pre-biasing `v` positive by a fixed
+/// constant; that bias could be exceeded whenever the caller's grid cell size
+/// shrank relative to its coordinate's extent, silently wrapping the `u32`
+/// cast into a garbage index and reading a garbage matrix entry.
+fn floor_mod_u32(v: f32, n: f32) -> u32 {
+    // Clamp before the cast: floored division keeps this in [0, n) modulo
+    // float rounding, but a `u32` cast of even a hair below zero is still an
+    // out-of-range conversion, so never rely on that residual staying positive.
+    return u32(max(v - floor(v / n) * n, 0.0));
+}
+
 /// Get dither threshold offset for color dithering (centered around 0).
 fn get_dither_threshold(pos: vec2<f32>, pattern: u32) -> f32 {
     if pattern == 0u {
         return 0.0;
     } else if pattern == 1u {
-        let x = u32(pos.x) % 4u;
-        let y = u32(pos.y) % 4u;
+        let x = floor_mod_u32(pos.x, 4.0);
+        let y = floor_mod_u32(pos.y, 4.0);
         let idx = y * 4u + x;
         return BAYER_4X4[idx] - 0.5;
     } else {
-        let x = u32(pos.x) % 8u;
-        let y = u32(pos.y) % 8u;
+        let x = floor_mod_u32(pos.x, 8.0);
+        let y = floor_mod_u32(pos.y, 8.0);
         let idx = y * 8u + x;
         return BAYER_8X8[idx] - 0.5;
     }
@@ -97,13 +111,13 @@ fn get_dither_threshold_raw(pos: vec2<f32>, pattern: u32) -> f32 {
     if pattern == 0u {
         return 0.5;
     } else if pattern == 1u {
-        let x = u32(pos.x) % 4u;
-        let y = u32(pos.y) % 4u;
+        let x = floor_mod_u32(pos.x, 4.0);
+        let y = floor_mod_u32(pos.y, 4.0);
         let idx = y * 4u + x;
         return BAYER_4X4[idx];
     } else {
-        let x = u32(pos.x) % 8u;
-        let y = u32(pos.y) % 8u;
+        let x = floor_mod_u32(pos.x, 8.0);
+        let y = floor_mod_u32(pos.y, 8.0);
         let idx = y * 8u + x;
         return BAYER_8X8[idx];
     }
@@ -123,12 +137,10 @@ fn find_nearest_palette_color(
 ) -> vec3<f32> {
     let oklab = linear_rgb_to_oklab(color);
 
-    // Apply dither offset to the lightness channel
-    let dithered_oklab = vec3<f32>(
-        oklab.x + dither_offset * 0.1,
-        oklab.y,
-        oklab.z
-    );
+    // Apply the dither offset to all three Oklab channels, not just
+    // lightness — a palette boundary that differs mainly in hue/chroma (a/b)
+    // would otherwise get no dither at all and render as a hard edge.
+    let dithered_oklab = oklab + vec3<f32>(dither_offset * 0.1);
 
     var best_distance = 1000000.0;
     var best_color = vec3<f32>(0.0, 0.0, 0.0);
@@ -154,16 +166,17 @@ fn find_nearest_palette_color(
 /// with one fetch — no sampler, so the unfilterable `Rgba32Float` LUT needs no
 /// filtering-sampler binding and the read is always the exact stored entry.
 ///
-/// Dithering is preserved exactly: the offset is applied to Oklab lightness and
-/// converted back to linear RGB before the lookup, so only the nearest search is
-/// approximated (to the LUT's cell resolution), not the dither.
+/// Dithering is preserved exactly: the offset is applied to all three Oklab
+/// channels and converted back to linear RGB before the lookup, so only the
+/// nearest search is approximated (to the LUT's cell resolution), not the
+/// dither.
 fn find_nearest_palette_color_lut(
     color: vec3<f32>,
     dither_offset: f32,
     lut: texture_3d<f32>,
 ) -> vec3<f32> {
     let oklab = linear_rgb_to_oklab(color);
-    let dithered_oklab = vec3<f32>(oklab.x + dither_offset * 0.1, oklab.y, oklab.z);
+    let dithered_oklab = oklab + vec3<f32>(dither_offset * 0.1);
     let dithered_rgb = oklab_to_linear_rgb(dithered_oklab);
 
     // Integer index of the cell containing the (clamped) color. `floor(c * dims)`

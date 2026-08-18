@@ -70,14 +70,14 @@ fn pixelate_world(pos: vec2<f32>, cell: f32) -> vec2<f32> {
     return (floor(pos / cell) + vec2<f32>(0.5)) * cell;
 }
 
-// Grid-cell index of a world position, biased positive so it can index the Bayer
-// dither matrices (which read it as u32) for negative world coordinates too. The
-// bias is a multiple of both Bayer matrix sizes, leaving the pattern phase
-// unchanged. One dither sample per cell makes each art-pixel block quantize as a
-// unit.
+// Grid-cell index of a world position. One dither sample per cell makes each
+// art-pixel block quantize as a unit; `color_quantize_functions`'s dither
+// lookup takes the index's modulo in float space, so this needs no positive
+// bias to stay safe for negative world coordinates or a `cell` much smaller
+// than `pos`.
 fn pixel_cell_index(pos: vec2<f32>, cell: f32) -> vec2<f32> {
     if cell <= 0.0 {
         return pos;
     }
-    return floor(pos / cell) + vec2<f32>(4096.0);
+    return floor(pos / cell);
 }
