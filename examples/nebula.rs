@@ -1,13 +1,19 @@
 //! Procedural nebula + twinkling starfield on the default 2D camera.
 //!
-//! The clouds are drawn in a retro palette with ordered dithering; the stars
-//! pulse in brightness and shift color over time. The whole sky slowly rotates
-//! and drifts to show the day/night and parallax controls.
+//! The clouds are drawn with ordered dithering; each star holds one swatch from
+//! its own layer's palette, and the fraction set by `twinkle_chance` blinks. The
+//! whole sky slowly rotates and drifts to show the day/night and parallax
+//! controls.
+//!
+//! Every color on screen is one authored here: each layer resolves its own
+//! density to one of its own three stops, so recoloring a layer never moves
+//! another layer's edges.
 //!
 //! Run from this crate's directory: `cargo run --example nebula`
 
 use bevy::prelude::*;
 use msg_shaders::prelude::*;
+use smallvec::smallvec;
 
 fn main() {
     App::new()
@@ -17,29 +23,10 @@ fn main() {
         .run();
 }
 
-/// A small retro space palette (linear RGB) the nebula is quantized to.
-fn palette() -> Vec<[f32; 4]> {
-    // Deep-space darks, nebula purples/blues, and bright star tips.
-    let srgb = [
-        [0x0d, 0x0a, 0x18],
-        [0x21, 0x14, 0x3a],
-        [0x1b, 0x2e, 0x5c],
-        [0x5a, 0x21, 0x9c],
-        [0x00, 0x27, 0x7f],
-        [0x00, 0x5d, 0xff],
-        [0x80, 0x61, 0xe6],
-        [0x00, 0xac, 0xff],
-        [0x00, 0xdc, 0xff],
-        [0xff, 0xbf, 0x00],
-        [0xc1, 0xff, 0xe2],
-        [0xff, 0xfc, 0xfc],
-    ];
-    srgb.iter()
-        .map(|[r, g, b]| {
-            let lin = Color::srgb_u8(*r, *g, *b).to_linear();
-            [lin.red, lin.green, lin.blue, 1.0]
-        })
-        .collect()
+/// One retro-space swatch (sRGB hex) as linear RGBA.
+fn swatch(r: u8, g: u8, b: u8) -> [f32; 4] {
+    let lin = Color::srgb_u8(r, g, b).to_linear();
+    [lin.red, lin.green, lin.blue, 1.0]
 }
 
 fn setup(mut commands: Commands) {
@@ -47,15 +34,14 @@ fn setup(mut commands: Commands) {
     commands.spawn((
         Nebula {
             size: Vec2::splat(1400.0),
-            palette: palette(),
-            background: [0.03, 0.02, 0.08, 1.0],
-            // Two cloud layers pulling different color ramps, composited over.
+            background: swatch(0x0d, 0x0a, 0x18),
+            // Two cloud layers, each painting only its own three stops.
             layers: vec![
                 NebulaLayer {
                     colors: [
-                        [0.10, 0.05, 0.25, 1.0],
-                        [0.35, 0.12, 0.55, 1.0],
-                        [0.55, 0.75, 1.00, 1.0],
+                        swatch(0x21, 0x14, 0x3a),
+                        swatch(0x5a, 0x21, 0x9c),
+                        swatch(0x80, 0x61, 0xe6),
                     ],
                     scale: 0.006,
                     intensity: 0.9,
@@ -64,28 +50,35 @@ fn setup(mut commands: Commands) {
                 },
                 NebulaLayer {
                     colors: [
-                        [0.06, 0.14, 0.30, 1.0],
-                        [0.12, 0.45, 0.55, 1.0],
-                        [1.00, 0.85, 0.50, 1.0],
+                        swatch(0x1b, 0x2e, 0x5c),
+                        swatch(0x00, 0x5d, 0xff),
+                        swatch(0x00, 0xdc, 0xff),
                     ],
                     scale: 0.016,
                     cloud_low: 0.5,
-                    intensity: 0.6,
+                    intensity: 0.85,
                     parallax: 0.2,
                     offset: Vec2::new(400.0, -250.0),
                     ..default()
                 },
             ],
             stars: vec![
+                // Near layer: the bright end of the palette.
                 StarLayer {
                     spacing: 8.0,
+                    colors: smallvec![
+                        swatch(0xc1, 0xff, 0xe2),
+                        swatch(0xff, 0xff, 0xff),
+                        swatch(0xff, 0xbf, 0x00),
+                    ],
                     parallax: 0.14,
                     ..default()
                 },
+                // Far layer: dimmer swatches, which is what reads as distance.
                 StarLayer {
                     spacing: 16.0,
                     density: 0.4,
-                    brightness: 1.3,
+                    colors: smallvec![swatch(0x6d, 0x8f, 0x9c), swatch(0x8f, 0x7a, 0x5c)],
                     parallax: 0.24,
                     seed: 5.0,
                 },

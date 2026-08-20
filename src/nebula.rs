@@ -2,18 +2,25 @@
 //!
 //! [`NebulaPlugin`] registers a [`Nebula`] component: attach it to an entity
 //! (with a `Transform`) and the plugin builds a quad that composites a stack of
-//! nebula [`NebulaLayer`]s over a base color, then adds a stack of
-//! [`StarLayer`]s. The output is snapped to the game's art-pixel grid
-//! (pixel-perfect from screen-space derivatives) and reduced to a palette with
-//! ordered dithering, reusing [`crate::ColorQuantizationPlugin`] and
+//! nebula [`NebulaLayer`]s over a base color, then a stack of [`StarLayer`]s.
+//! The output is snapped to the game's art-pixel grid (pixel-perfect from
+//! screen-space derivatives) with ordered dithering, reusing
 //! [`crate::PixelationPlugin`].
 //!
 //! Each nebula layer has its own noise settings, a three-stop color ramp
-//! (`c1` edge -> `c2` body -> `c3` core), and a parallax factor; layers
-//! composite back-to-front, painting over ([`NebulaBlend::Over`]) or adding
-//! ([`NebulaBlend::Additive`]). Star layers likewise carry their own spacing,
-//! density, and parallax. Set [`Nebula::scroll`] to the camera's world position
-//! each frame; each layer multiplies it by its own parallax factor for depth.
+//! (`c1` edge -> `c2` body -> `c3` core), and a parallax factor. Star layers
+//! likewise carry their own spacing, density, and parallax. Set
+//! [`Nebula::scroll`] to the camera's world position each frame; each layer
+//! multiplies it by its own parallax factor for depth.
+//!
+//! **Layers never share colors.** Each layer finishes its own math: its density
+//! decides where it paints and which of its own three stops it paints with,
+//! resolved by one ordered-dither decision rather than an alpha. The result is written
+//! over what is behind rather than blended into it, so every pixel on screen is
+//! exactly one authored color — the background, one of a cloud layer's three
+//! stops, or one of the two star colors. Nothing downstream has to match a
+//! blended color back to a shared palette, which is what would otherwise let
+//! one layer's color choices move another layer's visible edges.
 //!
 //! ```
 //! use bevy::prelude::*;
@@ -28,6 +35,9 @@
 //! }
 //! ```
 
+use crate::DitherPattern;
+use smallvec::{SmallVec, smallvec};
+
 use bevy::{
     asset::{embedded_asset, load_internal_asset, uuid_handle},
     prelude::*,
@@ -35,9 +45,6 @@ use bevy::{
     shader::{Shader, ShaderRef},
     sprite_render::{AlphaMode2d, Material2d, Material2dPlugin},
 };
-
-use crate::quantize::{MAX_PALETTE_COLORS, linear_rgb_to_oklab};
-use crate::quantize_material::ColorQuantizeUniforms;
 
 /// Handle for the importable nebula functions shader.
 pub const NEBULA_FUNCTIONS_SHADER_HANDLE: Handle<Shader> =
@@ -50,28 +57,13 @@ pub const MAX_NEBULA_LAYERS: usize = 6;
 /// Maximum star layers uploaded to the shader (fixed uniform array).
 pub const MAX_STAR_LAYERS: usize = 4;
 
-/// How nebula layers combine with what is behind them.
-#[derive(Debug, Clone, Copy, Reflect, PartialEq, Eq, Default)]
-pub enum NebulaBlend {
-    /// Painter's over: dense areas paint the layer's color over the layers
-    /// below. Keeps colors distinct — the right choice for limited palettes.
-    #[default]
-    Over,
-    /// Emissive add: layers brighten what is behind them.
-    Additive,
-}
-
-impl NebulaBlend {
-    fn as_u32(self) -> u32 {
-        match self {
-            NebulaBlend::Over => 0,
-            NebulaBlend::Additive => 1,
-        }
-    }
-}
+/// Maximum star colors uploaded to the shader, summed over every star layer
+/// (fixed uniform array). [`Nebula::to_uniforms`] fills the array layer by
+/// layer and drops the colors that no longer fit.
+pub const MAX_STAR_COLORS: usize = 8;
 
 /// One nebula cloud layer: a noise field mapped through a three-stop color ramp
-/// and composited with its own parallax and decorrelation.
+/// and composited with its own parallax and decorrelation offset.
 #[derive(Debug, Clone, Reflect)]
 pub struct NebulaLayer {
     /// Ramp colors, linear RGBA: `[edge, body, core]`, keyed by cloud density.
@@ -88,14 +80,19 @@ pub struct NebulaLayer {
     pub cloud_low: f32,
     /// Upper edge of the cloud smoothstep band.
     pub cloud_high: f32,
-    /// Coverage / brightness multiplier for this layer.
+    /// How far up its own ramp this layer climbs where it is densest, as a
+    /// fraction: `1.0` reaches `c3`, `0.5` peaks halfway between `c1` and `c2`.
+    /// Lower values thin the layer and hold it to its darker stops, never
+    /// dimming it into a blend with the layer below.
     pub intensity: f32,
-    /// Fraction of [`Nebula::scroll`] this layer drifts by (parallax depth).
+    /// How much this layer sticks to the world as [`Nebula::scroll`] moves: `0`
+    /// pins it to the camera, `1` moves it with the world. Lower reads as further
+    /// away. The drift is quantized to whole art pixels.
     pub parallax: f32,
     /// Sampling offset in world units, decorrelating layers that share settings.
+    /// The noise is hashed per lattice cell, so a shift alone yields an
+    /// unrelated field — no second decorrelation axis is needed.
     pub offset: Vec2,
-    /// Sampling rotation in radians, likewise for decorrelation.
-    pub rotation: f32,
 }
 
 impl Default for NebulaLayer {
@@ -115,7 +112,6 @@ impl Default for NebulaLayer {
             intensity: 1.0,
             parallax: 0.12,
             offset: Vec2::ZERO,
-            rotation: 0.0,
         }
     }
 }
@@ -128,9 +124,19 @@ pub struct StarLayer {
     pub spacing: f32,
     /// Fraction of blocks that hold a star (0-1).
     pub density: f32,
-    /// Emission multiplier; above 1 pushes peaks toward white.
-    pub brightness: f32,
-    /// Fraction of [`Nebula::scroll`] this layer drifts by (parallax depth).
+    /// Colors this layer's stars are drawn from (linear RGBA). Each star picks
+    /// one by hash and keeps it, so a layer shows exactly these colors and
+    /// never a mixture of them. An empty list draws no stars.
+    ///
+    /// Give near layers the brighter end of the palette and far layers the
+    /// dimmer end: with stars drawn at full color, this split is what reads as
+    /// depth. Inline capacity is [`MAX_STAR_COLORS`], the shader's cap on the
+    /// colors of every layer put together, so a list that spills to the heap is
+    /// already one the shader cannot take whole.
+    pub colors: SmallVec<[[f32; 4]; MAX_STAR_COLORS]>,
+    /// How much this layer sticks to the world as [`Nebula::scroll`] moves: `0`
+    /// pins it to the camera, `1` moves it with the world. Lower reads as further
+    /// away. The drift is quantized to whole star cells.
     pub parallax: f32,
     /// Per-layer seed offset, decorrelating layers from one another.
     pub seed: f32,
@@ -141,7 +147,7 @@ impl Default for StarLayer {
         Self {
             spacing: 9.0,
             density: 0.55,
-            brightness: 1.6,
+            colors: smallvec![[0.60, 0.80, 1.00, 1.0]],
             parallax: 0.15,
             seed: 0.0,
         }
@@ -151,8 +157,9 @@ impl Default for StarLayer {
 /// Layered nebula + starfield background.
 ///
 /// Attach with a `Transform`; the plugin inserts the quad mesh and material.
-/// Leave [`Nebula::palette`] empty for a smooth, un-quantized look; supply
-/// linear-RGB colors to snap to a palette with dithering.
+/// There is no separate quantization palette: the colors authored on the
+/// background, the layers, and the star ends *are* the palette, and every
+/// rendered pixel is one of them exactly.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component)]
 pub struct Nebula {
@@ -162,24 +169,17 @@ pub struct Nebula {
     pub background: [f32; 4],
     /// Cloud layers, composited back to front. Capped at [`MAX_NEBULA_LAYERS`].
     pub layers: Vec<NebulaLayer>,
-    /// Star layers, added on top. Capped at [`MAX_STAR_LAYERS`].
+    /// Star layers, drawn on top. Capped at [`MAX_STAR_LAYERS`].
     pub stars: Vec<StarLayer>,
-    /// Cool end of the star color shift (linear RGBA).
-    pub star_cool: [f32; 4],
-    /// Warm end of the star color shift (linear RGBA).
-    pub star_warm: [f32; 4],
-    /// Twinkle rate (radians per second, scaled per star).
+    /// Blink rate (radians per second, scaled per star).
     pub twinkle_speed: f32,
-    /// Twinkle pulse exponent; higher = briefer, sparklier flashes.
-    pub twinkle_sharpness: f32,
-    /// Oscillation floor below which a star winks fully dark (0 disables).
-    pub star_blackout: f32,
-    /// How layers combine with what is behind them.
-    pub blend: NebulaBlend,
-    /// Quantization palette (max 64, linear RGB). Empty disables quantization.
-    pub palette: Vec<[f32; 4]>,
-    /// Dither pattern: 0 = none, 1 = Bayer 4x4, 2 = Bayer 8x8.
-    pub dither_pattern: u32,
+    /// Fraction of stars that twinkle at all (0-1). Those that do blink between
+    /// lit and dark; the rest hold steady, so `0.0` gives a still sky and `1.0`
+    /// puts every star on a blink.
+    pub twinkle_chance: f32,
+    /// Ordered-dither matrix shifting each layer's level across its stop
+    /// boundaries. [`DitherPattern::None`] gives hard edges and hard bands.
+    pub dither_pattern: DitherPattern,
     /// World units per art pixel. `0.0` derives it from screen derivatives
     /// (pixel-perfect, follows zoom); a positive value forces a size.
     pub pixel_size: f32,
@@ -217,7 +217,7 @@ impl Default for Nebula {
                     ],
                     scale: 0.009,
                     cloud_low: 0.45,
-                    intensity: 0.6,
+                    intensity: 0.85,
                     parallax: 0.18,
                     ..Default::default()
                 },
@@ -231,19 +231,14 @@ impl Default for Nebula {
                 StarLayer {
                     spacing: 15.0,
                     density: 0.4,
-                    brightness: 1.3,
+                    colors: smallvec![[0.45, 0.60, 0.85, 1.0], [1.00, 0.85, 0.50, 1.0]],
                     parallax: 0.22,
                     seed: 5.0,
                 },
             ],
-            star_cool: [0.60, 0.80, 1.00, 1.0],
-            star_warm: [1.00, 0.85, 0.50, 1.0],
             twinkle_speed: 2.0,
-            twinkle_sharpness: 3.0,
-            star_blackout: 0.12,
-            blend: NebulaBlend::Over,
-            palette: Vec::new(),
-            dither_pattern: 1,
+            twinkle_chance: 0.15,
+            dither_pattern: DitherPattern::default(),
             pixel_size: 0.0,
             scroll: Vec2::ZERO,
             rotation: 0.0,
@@ -269,23 +264,35 @@ impl Nebula {
                 cloud_high: layer.cloud_high,
                 intensity: layer.intensity,
                 parallax: layer.parallax,
-                rotation: layer.rotation,
                 octaves: layer.octaves.clamp(1, 8),
                 warp_octaves: layer.warp_octaves.clamp(1, 8),
                 _pad0: 0.0,
+                _pad1: 0.0,
             };
         }
 
+        // Every layer's colors go into one flat array; a layer addresses its own
+        // by the `(first, count)` slice it was packed into. Colors past the cap
+        // are dropped from the tail, so the layers that fit keep the palette
+        // they were authored with.
+        let mut star_colors = [Vec4::ZERO; MAX_STAR_COLORS];
+        let mut used = 0usize;
+
         let mut stars = [StarLayerUniform::default(); MAX_STAR_LAYERS];
         for (slot, star) in stars.iter_mut().zip(self.stars.iter()) {
+            let first = used;
+            for color in star.colors.iter().take(MAX_STAR_COLORS - first) {
+                star_colors[used] = Vec4::from_array(*color);
+                used += 1;
+            }
             *slot = StarLayerUniform {
                 params: Vec4::new(
                     star.spacing.max(1.0),
                     star.density,
-                    star.brightness,
+                    first as f32,
                     star.parallax,
                 ),
-                seed_pad: Vec4::new(star.seed, 0.0, 0.0, 0.0),
+                seed_pad: Vec4::new(star.seed, (used - first) as f32, 0.0, 0.0),
             };
         }
 
@@ -293,41 +300,21 @@ impl Nebula {
             layers,
             stars,
             background: Vec4::from_array(self.background),
-            star_cool: Vec4::from_array(self.star_cool),
-            star_warm: Vec4::from_array(self.star_warm),
+            star_colors,
             world_size: self.size,
             scroll: self.scroll,
             num_layers: self.layers.len().min(MAX_NEBULA_LAYERS) as u32,
             num_stars: self.stars.len().min(MAX_STAR_LAYERS) as u32,
-            blend: self.blend.as_u32(),
+            dither_pattern: self.dither_pattern.as_u32(),
             twinkle_speed: self.twinkle_speed,
-            twinkle_sharpness: self.twinkle_sharpness,
-            star_blackout: self.star_blackout,
+            twinkle_chance: self.twinkle_chance.clamp(0.0, 1.0),
+            _pad2: 0.0,
             rotation: self.rotation,
             time,
             pixel_size: self.pixel_size,
             seed: self.seed,
             _pad0: 0.0,
             _pad1: 0.0,
-        }
-    }
-
-    /// Build the quantization uniforms from the configured palette.
-    pub fn quantization_uniforms(&self) -> ColorQuantizeUniforms {
-        let mut palette = [Vec4::ZERO; MAX_PALETTE_COLORS];
-        let mut palette_oklab = [Vec4::ZERO; MAX_PALETTE_COLORS];
-        for (i, color) in self.palette.iter().take(MAX_PALETTE_COLORS).enumerate() {
-            palette[i] = Vec4::from_array(*color);
-            let (l, a, b) = linear_rgb_to_oklab(color[0], color[1], color[2]);
-            palette_oklab[i] = Vec4::new(l, a, b, 0.0);
-        }
-        ColorQuantizeUniforms {
-            palette,
-            palette_oklab,
-            palette_size: self.palette.len().min(MAX_PALETTE_COLORS) as u32,
-            alpha_cutoff: 0.03,
-            dither_pattern: self.dither_pattern,
-            transparency_floor: 0.06,
         }
     }
 }
@@ -345,18 +332,19 @@ pub struct NebulaLayerUniform {
     pub cloud_high: f32,
     pub intensity: f32,
     pub parallax: f32,
-    pub rotation: f32,
     pub octaves: u32,
     pub warp_octaves: u32,
     pub _pad0: f32,
+    pub _pad1: f32,
 }
 
 /// One star layer packed for the shader. Mirrors the WGSL `StarLayer`.
 #[derive(Clone, Copy, ShaderType, Default)]
 pub struct StarLayerUniform {
-    /// `(spacing, density, brightness, parallax)`.
+    /// `(spacing, density, first_color, parallax)`, where `first_color` indexes
+    /// [`NebulaUniforms::star_colors`].
     pub params: Vec4,
-    /// `(seed, _, _, _)`.
+    /// `(seed, color_count, _, _)`.
     pub seed_pad: Vec4,
 }
 
@@ -368,16 +356,17 @@ pub struct NebulaUniforms {
     pub layers: [NebulaLayerUniform; MAX_NEBULA_LAYERS],
     pub stars: [StarLayerUniform; MAX_STAR_LAYERS],
     pub background: Vec4,
-    pub star_cool: Vec4,
-    pub star_warm: Vec4,
+    /// Every star layer's colors, concatenated; each layer reads the slice its
+    /// `params.z`/`seed_pad.y` name.
+    pub star_colors: [Vec4; MAX_STAR_COLORS],
     pub world_size: Vec2,
     pub scroll: Vec2,
     pub num_layers: u32,
     pub num_stars: u32,
-    pub blend: u32,
+    pub dither_pattern: u32,
     pub twinkle_speed: f32,
-    pub twinkle_sharpness: f32,
-    pub star_blackout: f32,
+    pub twinkle_chance: f32,
+    pub _pad2: f32,
     pub rotation: f32,
     pub time: f32,
     pub pixel_size: f32,
@@ -391,8 +380,6 @@ pub struct NebulaUniforms {
 pub struct NebulaMaterial {
     #[uniform(0)]
     pub uniforms: NebulaUniforms,
-    #[uniform(1)]
-    pub quantization: ColorQuantizeUniforms,
 }
 
 impl Material2d for NebulaMaterial {
@@ -405,9 +392,12 @@ impl Material2d for NebulaMaterial {
     }
 }
 
-/// Marks a [`Nebula`] entity whose mesh and material have been inserted.
+/// Marks a [`Nebula`] entity whose mesh and material have been inserted, and
+/// records the [`Nebula::size`] its quad was built from. The shader maps UVs
+/// back to world units through the `world_size` uniform, so a stale extent here
+/// scales every world-space quantity it derives, the art-pixel grid included.
 #[derive(Component)]
-struct NebulaMesh;
+struct NebulaMesh(Vec2);
 
 /// Plugin that registers the nebula material and drives it.
 ///
@@ -441,13 +431,15 @@ impl Plugin for NebulaPlugin {
         app.register_type::<Nebula>();
         app.register_type::<NebulaLayer>();
         app.register_type::<StarLayer>();
-        app.register_type::<NebulaBlend>();
 
         if !app.is_plugin_added::<Material2dPlugin<NebulaMaterial>>() {
             app.add_plugins(Material2dPlugin::<NebulaMaterial>::default());
         }
 
-        app.add_systems(Update, (spawn_nebula_meshes, animate_nebula));
+        app.add_systems(
+            Update,
+            (spawn_nebula_meshes, resize_nebula_meshes, animate_nebula).chain(),
+        );
     }
 }
 
@@ -463,21 +455,39 @@ fn spawn_nebula_meshes(
         let mesh = meshes.add(Mesh::from(Rectangle::new(nebula.size.x, nebula.size.y)));
         let material = materials.add(NebulaMaterial {
             uniforms: nebula.to_uniforms(0.0),
-            quantization: nebula.quantization_uniforms(),
         });
-        commands
-            .entity(entity)
-            .insert((NebulaMesh, Mesh2d(mesh), MeshMaterial2d(material)));
+        commands.entity(entity).insert((
+            NebulaMesh(nebula.size),
+            Mesh2d(mesh),
+            MeshMaterial2d(material),
+        ));
+    }
+}
+
+/// Rebuilds the quad whenever [`Nebula::size`] changes, keeping the geometry
+/// and the `world_size` uniform describing the same rectangle.
+fn resize_nebula_meshes(
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut query: Query<(&Nebula, &mut NebulaMesh, &Mesh2d), Changed<Nebula>>,
+) {
+    for (nebula, mut built, handle) in &mut query {
+        if built.0 == nebula.size {
+            continue;
+        }
+        let Some(mesh) = meshes.get_mut(&handle.0) else {
+            continue;
+        };
+        *mesh = Mesh::from(Rectangle::new(nebula.size.x, nebula.size.y));
+        built.0 = nebula.size;
     }
 }
 
 /// Advances the nebula time and re-syncs animatable settings from the component,
-/// so runtime edits take effect. The palette is rebuilt only when the component
-/// changes.
+/// so runtime edits take effect.
 fn animate_nebula(
     time: Res<Time>,
     mut materials: ResMut<Assets<NebulaMaterial>>,
-    query: Query<(Ref<Nebula>, &MeshMaterial2d<NebulaMaterial>)>,
+    query: Query<(&Nebula, &MeshMaterial2d<NebulaMaterial>)>,
 ) {
     let elapsed = time.elapsed_secs();
     for (nebula, handle) in &query {
@@ -485,9 +495,6 @@ fn animate_nebula(
             continue;
         };
         material.uniforms = nebula.to_uniforms(elapsed);
-        if nebula.is_changed() {
-            material.quantization = nebula.quantization_uniforms();
-        }
     }
 }
 
@@ -496,24 +503,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn empty_palette_disables_quantization() {
+    fn dither_pattern_reaches_the_shader() {
         let nebula = Nebula {
-            palette: Vec::new(),
+            dither_pattern: DitherPattern::Bayer8x8,
             ..Default::default()
         };
-        assert_eq!(nebula.quantization_uniforms().palette_size, 0);
-    }
-
-    #[test]
-    fn palette_size_is_clamped() {
-        let nebula = Nebula {
-            palette: vec![[1.0, 1.0, 1.0, 1.0]; MAX_PALETTE_COLORS + 8],
-            ..Default::default()
-        };
-        assert_eq!(
-            nebula.quantization_uniforms().palette_size as usize,
-            MAX_PALETTE_COLORS
-        );
+        assert_eq!(nebula.to_uniforms(0.0).dither_pattern, 2);
     }
 
     #[test]
@@ -555,9 +550,113 @@ mod tests {
         assert!(nebula.to_uniforms(0.0).stars[0].params.x >= 1.0);
     }
 
+    /// Both chances are probabilities the shader tests a hash against, so a
+    /// `twinkle_chance` is a probability the shader tests a hash against, so a
+    /// value outside `0..=1` would make every star take one branch.
     #[test]
-    fn blend_maps_to_flag() {
-        assert_eq!(NebulaBlend::Over.as_u32(), 0);
-        assert_eq!(NebulaBlend::Additive.as_u32(), 1);
+    fn twinkle_chance_is_clamped_to_a_probability() {
+        let nebula = Nebula {
+            twinkle_chance: -1.0,
+            ..Default::default()
+        };
+        assert_eq!(nebula.to_uniforms(0.0).twinkle_chance, 0.0);
+    }
+
+    /// Each layer must address its own colors and no one else's, whatever the
+    /// layers before it contributed.
+    #[test]
+    fn star_layers_get_disjoint_color_slices() {
+        let nebula = Nebula {
+            stars: vec![
+                StarLayer {
+                    colors: smallvec![[1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0]],
+                    ..Default::default()
+                },
+                StarLayer {
+                    colors: smallvec![[0.0, 0.0, 1.0, 1.0]],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let u = nebula.to_uniforms(0.0);
+
+        assert_eq!((u.stars[0].params.z, u.stars[0].seed_pad.y), (0.0, 2.0));
+        assert_eq!((u.stars[1].params.z, u.stars[1].seed_pad.y), (2.0, 1.0));
+        assert_eq!(u.star_colors[0], Vec4::new(1.0, 0.0, 0.0, 1.0));
+        assert_eq!(u.star_colors[2], Vec4::new(0.0, 0.0, 1.0, 1.0));
+    }
+
+    /// Past the cap the colors that fit must keep their slices, so the layers
+    /// that still have a palette are drawn with the one they were authored
+    /// with rather than a shifted window into someone else's.
+    #[test]
+    fn star_colors_past_the_cap_are_dropped_from_the_tail() {
+        let nebula = Nebula {
+            stars: vec![
+                StarLayer {
+                    colors: smallvec![[1.0, 0.0, 0.0, 1.0]; MAX_STAR_COLORS],
+                    ..Default::default()
+                },
+                StarLayer {
+                    colors: smallvec![[0.0, 1.0, 0.0, 1.0]],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let u = nebula.to_uniforms(0.0);
+
+        assert_eq!(u.stars[0].seed_pad.y, MAX_STAR_COLORS as f32);
+        // Nothing left for the second layer, which then draws no stars.
+        assert_eq!(u.stars[1].seed_pad.y, 0.0);
+    }
+
+    /// Recoloring one layer must leave every layer's shape untouched. The
+    /// colors only ever reach `c1`/`c2`/`c3`; nothing the density field is
+    /// built from may be derived from them.
+    #[test]
+    fn layer_colors_never_reach_shape_uniforms() {
+        let base = Nebula::default();
+        let mut recolored = base.clone();
+        recolored.layers[0].colors = [
+            [1.0, 0.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0, 1.0],
+        ];
+
+        let a = base.to_uniforms(0.0);
+        let b = recolored.to_uniforms(0.0);
+        assert_eq!(a.num_layers, b.num_layers);
+        for i in 0..a.num_layers as usize {
+            let (x, y) = (a.layers[i], b.layers[i]);
+            assert_eq!(x.offset, y.offset, "layer {i} offset");
+            assert_eq!(x.scale, y.scale, "layer {i} scale");
+            assert_eq!(x.warp_strength, y.warp_strength, "layer {i} warp_strength");
+            assert_eq!(x.cloud_low, y.cloud_low, "layer {i} cloud_low");
+            assert_eq!(x.cloud_high, y.cloud_high, "layer {i} cloud_high");
+            assert_eq!(x.intensity, y.intensity, "layer {i} intensity");
+            assert_eq!(x.parallax, y.parallax, "layer {i} parallax");
+            assert_eq!(x.octaves, y.octaves, "layer {i} octaves");
+            assert_eq!(x.warp_octaves, y.warp_octaves, "layer {i} warp_octaves");
+        }
+        assert_eq!(a.seed, b.seed);
+    }
+
+    /// A layer's colors reach the shader as its own three stops and nowhere
+    /// else, so no other layer can see them.
+    #[test]
+    fn layer_colors_stay_on_their_own_layer() {
+        let mut nebula = Nebula::default();
+        let marker = [1.0, 0.0, 1.0, 1.0];
+        nebula.layers[0].colors[1] = marker;
+
+        let u = nebula.to_uniforms(0.0);
+        assert_eq!(u.layers[0].c2, Vec4::from_array(marker));
+        for i in 1..u.num_layers as usize {
+            let l = u.layers[i];
+            let m = Vec4::from_array(marker);
+            assert!(l.c1 != m && l.c2 != m && l.c3 != m, "layer {i} saw layer 0");
+        }
     }
 }

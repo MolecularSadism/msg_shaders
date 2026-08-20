@@ -67,7 +67,7 @@ pub use pixelate::{
 
 // Layered nebula + twinkling starfield background.
 pub use nebula::{
-    MAX_NEBULA_LAYERS, MAX_STAR_LAYERS, NEBULA_FUNCTIONS_SHADER_HANDLE, Nebula, NebulaBlend,
+    MAX_NEBULA_LAYERS, MAX_STAR_COLORS, MAX_STAR_LAYERS, NEBULA_FUNCTIONS_SHADER_HANDLE, Nebula,
     NebulaLayer, NebulaLayerUniform, NebulaMaterial, NebulaPlugin, NebulaUniforms, StarLayer,
     StarLayerUniform,
 };
@@ -78,7 +78,7 @@ pub mod prelude {
         BlackHoleQuantization, ColorQuantizationPlugin, ColorQuantizeMaterial,
         ColorQuantizeUniforms, DitherPattern, HoleQuantization, LensingHoleCamera,
         LensingHolePlugin, MAX_NEBULA_LAYERS, MAX_PALETTE_COLORS, MAX_STAR_LAYERS, Nebula,
-        NebulaBlend, NebulaLayer, NebulaMaterial, NebulaPlugin, PixelateConfig, PixelateMaterial,
+        NebulaLayer, NebulaMaterial, NebulaPlugin, PixelateConfig, PixelateMaterial,
         PixelationPlugin, QuantizationConfig, QuantizePixelateMaterial, StarLayer,
         lens_capture_extent,
     };

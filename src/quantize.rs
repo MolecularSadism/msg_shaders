@@ -33,8 +33,10 @@ pub const COLOR_QUANTIZE_FUNCTIONS_SHADER_HANDLE: Handle<Shader> =
 /// Limited by shader uniform buffer size.
 pub const MAX_PALETTE_COLORS: usize = 64;
 
-/// Dithering pattern for color quantization.
+/// Ordered-dither matrix, shared by every effect in this crate that dithers:
+/// it selects the matrix `get_dither_threshold` reads in WGSL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DitherPattern {
     /// No dithering - pure nearest color matching
     None,

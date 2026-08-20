@@ -1,6 +1,6 @@
 [package]
 name = "msg_shaders"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 authors = ["ffmulks <63452434+ffmulks@users.noreply.github.com>"]
 license = "MIT OR Apache-2.0"
@@ -14,6 +14,9 @@ categories = ["game-development", "rendering", "graphics"]
 default = ["render_2d"]
 render_2d = []
 render_3d = []
+# Derive `Serialize`/`Deserialize` on the plain-data settings enums, so a game
+# can author them straight from its own config files.
+serde = ["dep:serde"]
 
 [dependencies]
 bevy = { version = "0.18", default-features = false, features = [
@@ -26,6 +29,8 @@ bevy = { version = "0.18", default-features = false, features = [
     "bevy_sprite",
     "bevy_sprite_render",
 ] }
+serde = { version = "1", features = ["derive"], optional = true }
+smallvec = "1.15.1"
 msg_post_process = { git = "https://github.com/MolecularSadism/msg_post_process", tag = "v0.1.0" }
 
 [dev-dependencies]
