@@ -142,6 +142,8 @@ fn quad_scale_factors(geo: &BlackHoleGeometry) -> (f32, f32) {
 
 /// Accretion disc color configuration for different radial zones.
 #[derive(Debug, Clone, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
 pub struct BlackHoleColors {
     /// Innermost disc: white-hot plasma near the ISCO (Inner Stable Circular Orbit).
     pub disk_inner: [f32; 4],
@@ -169,6 +171,8 @@ impl Default for BlackHoleColors {
 
 /// Geometric parameters controlling the black hole's spatial structure.
 #[derive(Debug, Clone, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
 pub struct BlackHoleGeometry {
     /// Schwarzschild radius - the event horizon boundary (normalized, 0.0-1.0).
     /// This defines the size of the black central region.
@@ -225,6 +229,8 @@ impl Default for BlackHoleGeometry {
 /// - Doppler beaming: Relativistic brightening of approaching matter
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
 pub struct BlackHole {
     /// Visual size in world units.
     pub size: f32,
