@@ -125,7 +125,7 @@ cargo run --example lensing
 
 | msg_shaders | Bevy | Rust |
 |-------------|------|------|
-| 0.2 | 0.18 | 1.85+ (edition 2024) |
+| 0.2-0.4 | 0.18 | 1.85+ (edition 2024) |
 
 ## Installation
 
