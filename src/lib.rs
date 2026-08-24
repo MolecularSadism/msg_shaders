@@ -24,6 +24,12 @@
 //!
 //! - `render_2d` (default) — `Mesh2d` materials and the screen-space lensing pipeline.
 //! - `render_3d` — `Mesh3d` variant of the black-hole material.
+//! - `serde` — `Serialize`/`Deserialize` on the plain-data settings enums and the [`BlackHole`],
+//!   [`BlackHoleColors`], [`BlackHoleGeometry`], and [`HoleQuantization`] config types, so a game
+//!   can author them straight from its own config files. The config structs use struct-level
+//!   `#[serde(default, deny_unknown_fields)]`: a partial file sets only the fields it names (the
+//!   rest fall back to the `Default` impls), while a misspelled field name is a parse error rather
+//!   than being silently ignored.
 //!
 //! # License
 //!
@@ -141,7 +147,10 @@ fn quad_scale_factors(geo: &BlackHoleGeometry) -> (f32, f32) {
 }
 
 /// Accretion disc color configuration for different radial zones.
-#[derive(Debug, Clone, Reflect)]
+#[derive(Debug, Clone, PartialEq, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default, deny_unknown_fields))]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub struct BlackHoleColors {
     /// Innermost disc: white-hot plasma near the ISCO (Inner Stable Circular Orbit).
     pub disk_inner: [f32; 4],
@@ -168,7 +177,10 @@ impl Default for BlackHoleColors {
 }
 
 /// Geometric parameters controlling the black hole's spatial structure.
-#[derive(Debug, Clone, Reflect)]
+#[derive(Debug, Clone, PartialEq, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default, deny_unknown_fields))]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub struct BlackHoleGeometry {
     /// Schwarzschild radius - the event horizon boundary (normalized, 0.0-1.0).
     /// This defines the size of the black central region.
@@ -223,8 +235,11 @@ impl Default for BlackHoleGeometry {
 /// - Accretion disc: Orbiting matter heated to incandescence
 /// - Gravitational lensing: Light bending around the singularity creating lensed top/bottom views
 /// - Doppler beaming: Relativistic brightening of approaching matter
-#[derive(Component, Debug, Clone, Reflect)]
+#[derive(Component, Debug, Clone, PartialEq, Reflect)]
 #[reflect(Component)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default, deny_unknown_fields))]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub struct BlackHole {
     /// Visual size in world units.
     pub size: f32,
@@ -259,8 +274,11 @@ impl Default for BlackHole {
 ///
 /// When present, applies retro-style palette quantization with dithering.
 /// The palette colors should be in linear RGB space.
-#[derive(Component, Debug, Clone, Reflect, Default)]
+#[derive(Component, Debug, Clone, PartialEq, Reflect)]
 #[reflect(Component)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default, deny_unknown_fields))]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub struct HoleQuantization {
     /// Color palette for quantization (max 64 colors, linear RGB)
     pub palette: Vec<[f32; 4]>,
@@ -270,6 +288,14 @@ pub struct HoleQuantization {
     pub dither_pattern: u32,
     /// Minimum normalized alpha for dithering (0.0-1.0)
     pub transparency_floor: f32,
+}
+
+/// The curated settings of [`HoleQuantization::new`] with an empty palette
+/// (an empty palette leaves the output unquantized).
+impl Default for HoleQuantization {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
 }
 
 impl HoleQuantization {

@@ -34,3 +34,7 @@ jobs:
       # Plain `cargo test` so doc tests run too (`--all-targets` would skip them).
       - name: Tests (includes offline WGSL validation via naga)
         run: cargo test --locked
+      # The serde derives and their round-trip/partial-deserialize tests are
+      # feature-gated, so exercise them explicitly.
+      - name: Tests (serde feature)
+        run: cargo test --locked --features serde

@@ -3237,11 +3237,12 @@ dependencies = [
 
 [[package]]
 name = "msg_shaders"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bevy",
  "msg_post_process",
  "naga",
+ "ron",
  "serde",
  "smallvec",
 ]

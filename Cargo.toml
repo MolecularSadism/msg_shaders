@@ -1,6 +1,6 @@
 [package]
 name = "msg_shaders"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 authors = ["ffmulks <63452434+ffmulks@users.noreply.github.com>"]
 license = "MIT OR Apache-2.0"
@@ -14,8 +14,11 @@ categories = ["game-development", "rendering", "graphics"]
 default = ["render_2d"]
 render_2d = []
 render_3d = []
-# Derive `Serialize`/`Deserialize` on the plain-data settings enums, so a game
-# can author them straight from its own config files.
+# Derive `Serialize`/`Deserialize` on the plain-data settings enums and the
+# `BlackHole`/`HoleQuantization` config types, so a game can author them
+# straight from its own config files. The config structs use struct-level
+# `#[serde(default, deny_unknown_fields)]` backed by their `Default` impls, so
+# partial files deserialize while misspelled field names are rejected.
 serde = ["dep:serde"]
 
 [dependencies]
@@ -38,6 +41,9 @@ msg_post_process = { git = "https://github.com/MolecularSadism/msg_post_process"
 naga = { version = "27", features = ["wgsl-in"] }
 # The windowed example needs the full engine (windowing, input, defaults).
 bevy = { version = "0.18" }
+# Round-trip and partial-deserialize tests for the `serde` feature, in the
+# format the configs are authored in downstream.
+ron = "0.12"
 
 [lints.rust]
 # Mark `bevy_lint` as a valid `cfg`, as it is set when the Bevy linter runs.
