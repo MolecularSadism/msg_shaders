@@ -147,8 +147,8 @@ fn cloud_layer(
     let radial_chaos = hash(floor(norm_r * params.chaos_seed) * 73.1) * TAU;
     let chaotic_phi = rotating_phi + radial_chaos + params.phase_offset;
 
-    // Variable cloud count per radial band prevents artificial patterns
-    let ang_count = params.angular_count + hash(band12 * params.chaos_seed) * 20.0;
+    // Integer count: clouds tile the ring seamlessly and the layer repeats each revolution.
+    let ang_count = max(round(params.angular_count + hash(band12 * params.chaos_seed) * 20.0), 1.0);
 
     // Convert to grid coordinates for discrete cloud placement
     let ang_phase = chaotic_phi * ang_count / TAU;
@@ -159,8 +159,9 @@ fn cloud_layer(
     let ang_frac = fract(ang_phase);
     let rad_frac = fract(rad_phase);
 
-    // Unique cloud identifier for visibility and shape variation
-    let cloud_id = ang_id * 7.0 + rad_id * 13.0 + hash(rad_id * 97.0) * 100.0;
+    // Slot wrapped into [0, ang_count) so cloud identities repeat each revolution and never grow unbounded.
+    let ang_slot = ang_id - ang_count * floor(ang_id / ang_count);
+    let cloud_id = ang_slot * 7.0 + rad_id * 13.0 + hash(rad_id * 97.0) * 100.0;
 
     // Stochastic visibility based on density parameter
     let density_adjusted_threshold = params.visibility_threshold / material.cloud_density;

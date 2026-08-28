@@ -441,17 +441,37 @@ fn spawn_blackhole_meshes(
     }
 }
 
+/// Wraps the animation clock to the disc's rotation period, keeping every
+/// time-derived shader angle bounded however long the app runs.
+///
+/// The accretion disc is a rigidly rotating pattern, periodic over one
+/// revolution (`rotating_phi` advances by `TAU` at rate `spin * 0.5`), so
+/// `elapsed % period` renders the same frame while holding every
+/// `sin`/`floor`/`fract` argument in the range where `f32` stays precise. A
+/// near-zero spin has no motion, so it falls back to a large fixed window to
+/// keep the value bounded.
+#[cfg(any(feature = "render_2d", feature = "render_3d"))]
+fn looped_time(elapsed: f64, spin: f32) -> f32 {
+    let spin = spin.abs() as f64;
+    let period = if spin > 1e-4 {
+        2.0 * std::f64::consts::TAU / spin
+    } else {
+        3600.0
+    };
+    elapsed.rem_euclid(period) as f32
+}
+
 #[cfg(feature = "render_3d")]
 fn update_blackhole_time_3d(
     time: Res<Time>,
     mut materials: ResMut<Assets<BlackHoleMaterial>>,
     query: Query<&MeshMaterial3d<BlackHoleMaterial>>,
 ) {
-    let elapsed = time.elapsed_secs();
+    let elapsed = time.elapsed_secs_f64();
 
     for material_handle in &query {
         if let Some(material) = materials.get_mut(&material_handle.0) {
-            material.uniforms.time = elapsed;
+            material.uniforms.time = looped_time(elapsed, material.uniforms.spin);
         }
     }
 }
@@ -462,11 +482,11 @@ fn update_blackhole_time_2d(
     mut materials: ResMut<Assets<BlackHoleMaterial>>,
     query: Query<&MeshMaterial2d<BlackHoleMaterial>>,
 ) {
-    let elapsed = time.elapsed_secs();
+    let elapsed = time.elapsed_secs_f64();
 
     for material_handle in &query {
         if let Some(material) = materials.get_mut(&material_handle.0) {
-            material.uniforms.time = elapsed;
+            material.uniforms.time = looped_time(elapsed, material.uniforms.spin);
         }
     }
 }
@@ -713,3 +733,47 @@ fn drive_lensing(
 
 #[cfg(not(feature = "render_2d"))]
 fn drive_lensing() {}
+
+#[cfg(all(test, any(feature = "render_2d", feature = "render_3d")))]
+mod looped_time_tests {
+    use super::looped_time;
+
+    const SPIN: f32 = 1.2;
+    // One disc revolution: `rotating_phi` advances by TAU at rate `spin * 0.5`.
+    const PERIOD: f64 = 2.0 * std::f64::consts::TAU / SPIN as f64;
+
+    #[test]
+    fn stays_within_one_period() {
+        // Even a decade of uptime maps into `[0, period)`, so the shader's
+        // time-derived angles never grow past where `f32` precision holds.
+        for &elapsed in &[0.0, 5.0, PERIOD, 1_000.0, 3.15e8] {
+            let t = looped_time(elapsed, SPIN);
+            assert!(
+                (0.0..PERIOD as f32).contains(&t),
+                "elapsed {elapsed}: {t} out of [0, {PERIOD})"
+            );
+        }
+    }
+
+    #[test]
+    fn is_seamless_across_the_wrap() {
+        // The fed value is periodic with the disc's own rotation period, so the
+        // instant the clock wraps renders the same frame — no visible seam. The
+        // shader is periodic over that period, so equal inputs mean equal frames.
+        for rev in 1..=10_000 {
+            let base = 0.37;
+            let wrapped = looped_time(base + rev as f64 * PERIOD, SPIN);
+            assert!(
+                (wrapped - looped_time(base, SPIN)).abs() < 1e-2,
+                "revolution {rev} drifted from the seam"
+            );
+        }
+    }
+
+    #[test]
+    fn frozen_disc_is_bounded() {
+        // A near-zero spin has no animation; the clock still must not run away.
+        let t = looped_time(9.9e8, 0.0);
+        assert!(t.is_finite() && (0.0..3600.0).contains(&t));
+    }
+}
