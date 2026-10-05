@@ -198,6 +198,8 @@ fn prepare_lensing_display_uniforms(
             strength_ring: extracted.lens_strength_ring[i],
             photon_ring_color: extracted.lens_photon_ring_color[i],
             black_color: extracted.lens_black_color[i],
+            ring_colors: extracted.lens_ring_colors[i],
+            ring_pattern: extracted.lens_ring_pattern[i],
         };
     }
 

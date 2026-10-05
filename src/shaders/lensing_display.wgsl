@@ -28,6 +28,11 @@ struct LensData {
     strength_ring: vec4<f32>,
     photon_ring_color: vec4<f32>,
     black_color: vec4<f32>,
+    // Multi-color ring; the first `ring_pattern.x` slots are used.
+    ring_colors: array<vec4<f32>, 4>,
+    // x = ring color count (0 = photon_ring_color only), y = streak length in
+    // art pixels, z = scatter fraction, w = seed.
+    ring_pattern: vec4<f32>,
 };
 
 const MAX_LENSES: u32 = 64u;
@@ -185,6 +190,44 @@ fn maybe_quantize(color: vec4<f32>, dither_pos: vec2<f32>) -> vec4<f32> {
     );
 }
 
+// Integer hash (PCG output permutation) mapped to [0, 1).
+fn hash_u32(seed: u32) -> u32 {
+    let state = seed * 747796405u + 2891336453u;
+    let word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+fn hash3_01(a: i32, b: i32, c: u32) -> f32 {
+    let h = hash_u32(bitcast<u32>(a) ^ hash_u32(bitcast<u32>(b) ^ hash_u32(c)));
+    return f32(h) / 4294967296.0;
+}
+
+// Photon-ring color of one art-pixel cell of lens `i`. `snapped` is the cell's
+// center in the hole's rotated frame and `edge` the shadow radius, both in world
+// units. Cells are grouped into rows by distance from the shadow edge and into
+// streaks of `ring_pattern.y` cells along each row; a streak shares one color,
+// and a `ring_pattern.z` fraction of cells picks its own.
+fn ring_color(i: u32, snapped: vec2<f32>, edge: f32, cell: f32) -> vec3<f32> {
+    let pattern = u.lenses[i].ring_pattern;
+    let count = u32(pattern.x);
+    if count == 0u {
+        return u.lenses[i].photon_ring_color.rgb;
+    }
+    let seed = u32(pattern.w);
+    let unit = max(cell, 1e-6);
+    let dist = length(snapped);
+    let row = i32(floor((dist - edge) / unit));
+    let arc = atan2(snapped.y, snapped.x) * dist / unit;
+    let streak = i32(floor(arc / pattern.y));
+    var pick = hash3_01(row, streak, seed);
+    let cell_index = vec2<i32>(floor(snapped / unit));
+    if hash3_01(cell_index.x, cell_index.y, seed ^ 0x9e3779b9u) < pattern.z {
+        pick = hash3_01(cell_index.x, cell_index.y, seed ^ 0x85ebca6bu);
+    }
+    let index = min(u32(pick * f32(count)), count - 1u);
+    return u.lenses[i].ring_colors[index].rgb;
+}
+
 @fragment
 fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let world = world_from_uv(in.uv);
@@ -250,7 +293,9 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         let ring_t = clamp(1.0 - (r - rs) / (lens.strength_ring.y * 6.0), 0.0, 1.0);
         let ring_t2 = ring_t * ring_t;
         let ring_i = ring_t2 * ring_t2 * lens.strength_ring.z;
-        ring_accum += lens.photon_ring_color.rgb * ring_i;
+        if ring_i > 0.0 {
+            ring_accum += ring_color(i, snapped, rs * size, cell) * ring_i;
+        }
         ring_strength = max(ring_strength, ring_i);
 
         // Horizon dominates; otherwise the strongest ring owns the fragment's center.
