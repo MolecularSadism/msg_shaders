@@ -661,6 +661,25 @@ impl RingEdge {
     }
 }
 
+impl PhotonRingPattern {
+    /// Packs the pattern for [`LensData`]: the color slots,
+    /// `(color count, streak length, scatter, seed)`, and the packed `edge`.
+    pub fn pack(&self) -> ([Vec4; MAX_RING_COLORS], Vec4, Vec4) {
+        let mut colors = [Vec4::ZERO; MAX_RING_COLORS];
+        let count = self.colors.len().min(MAX_RING_COLORS);
+        for (slot, color) in colors.iter_mut().zip(&self.colors) {
+            *slot = Vec4::from_array(*color);
+        }
+        let params = Vec4::new(
+            count as f32,
+            self.streak_length.max(1.0),
+            self.scatter.clamp(0.0, 1.0),
+            self.seed as f32,
+        );
+        (colors, params, self.edge.pack())
+    }
+}
+
 /// World-space side length of the square scene-capture canvas for a viewport of
 /// the given world size. The canvas is axis-aligned and must cover the viewport
 /// at every camera rotation, so it spans the viewport diagonal on both axes.
