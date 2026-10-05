@@ -33,6 +33,9 @@ struct LensData {
     // x = ring color count (0 = photon_ring_color only), y = streak length in
     // art pixels, z = scatter fraction, w = seed.
     ring_pattern: vec4<f32>,
+    // x = edge mode (0 dither, 1 cutoff, 2 gradient, 3 additive), y = dither
+    // pattern, z = cutoff threshold. Read only when `ring_pattern.x > 0`.
+    ring_edge: vec4<f32>,
 };
 
 const MAX_LENSES: u32 = 64u;
@@ -240,6 +243,10 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 
     var ring_accum = vec3<f32>(0.0);
     var ring_strength = 0.0;
+    // Patterned ring drawn over the scene (dither, cutoff, gradient edges): the
+    // most opaque lens's color and opacity.
+    var over_color = vec3<f32>(0.0);
+    var over_alpha = 0.0;
     var horizon = false;
     var horizon_color = vec3<f32>(0.0);
     // Center of the lens owning this fragment, so the dither cell is measured from
@@ -293,10 +300,29 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         let ring_t = clamp(1.0 - (r - rs) / (lens.strength_ring.y * 6.0), 0.0, 1.0);
         let ring_t2 = ring_t * ring_t;
         let ring_i = ring_t2 * ring_t2 * lens.strength_ring.z;
+        let mode = u32(lens.ring_edge.x);
+        let patterned = lens.ring_pattern.x > 0.0;
         if ring_i > 0.0 {
-            ring_accum += ring_color(i, snapped, rs * size, cell) * ring_i;
+            let color = ring_color(i, snapped, rs * size, cell);
+            if !patterned || mode == 3u {
+                ring_accum += color * ring_i;
+                ring_strength = max(ring_strength, ring_i);
+            } else {
+                let coverage = min(ring_i, 1.0);
+                var alpha = coverage;
+                if mode == 0u {
+                    let cell_index = floor(snapped / max(cell, 1e-6));
+                    let threshold = cq::get_dither_threshold_raw(cell_index, u32(lens.ring_edge.y));
+                    alpha = select(0.0, 1.0, coverage > threshold);
+                } else if mode == 1u {
+                    alpha = select(0.0, 1.0, coverage >= lens.ring_edge.z);
+                }
+                if alpha > over_alpha {
+                    over_alpha = alpha;
+                    over_color = color;
+                }
+            }
         }
-        ring_strength = max(ring_strength, ring_i);
 
         // Horizon dominates; otherwise the strongest ring owns the fragment's center.
         let weight = select(ring_i, 1e9, in_horizon);
@@ -316,6 +342,12 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(horizon_color, 1.0);
     }
 
+    // An opaque patterned ring cell is its exact color: no scene read, no
+    // palette match.
+    if over_alpha >= 1.0 {
+        return vec4<f32>(over_color, 1.0);
+    }
+
     // Dither phase per art-pixel cell, in the owning lens's centered (unrotated)
     // frame so the quantized blocks stay locked to the hole as it moves. Rotation
     // is confined to the ring/shadow geometry above, never the lensed background.
@@ -323,8 +355,9 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 
     // The lit scene plus any ring glow. Fragments outside the ring band stop
     // here, so the palette match below runs only on the ring.
-    let ring_mask = clamp(ring_strength, 0.0, 1.0);
-    let scene = vec4<f32>(lensed_scene(world) + ring_accum, 1.0);
+    let ring_mask = max(clamp(ring_strength, 0.0, 1.0), over_alpha);
+    let lit = lensed_scene(world) + ring_accum;
+    let scene = vec4<f32>(mix(lit, over_color, over_alpha), 1.0);
     if ring_mask <= 0.0 {
         return scene;
     }

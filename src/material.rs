@@ -146,7 +146,7 @@ impl Material2d for BlackHoleMaterial {
 /// Kept in sync with the `array<LensData, …>` size in `lensing_display.wgsl`.
 pub const MAX_LENSES: usize = 64;
 
-/// One lens packed for the combined-field shader. Ten 16-byte rows (160 B).
+/// One lens packed for the combined-field shader. Eleven 16-byte rows (176 B).
 ///
 /// Components are packed into `vec4`s to keep a tight, alignment-friendly layout
 /// for the uniform array; the shader unpacks them by field index.
@@ -167,6 +167,8 @@ pub struct LensData {
     /// `x` = ring color count (`0` = `photon_ring_color` only), `y` = streak
     /// length in art pixels, `z` = scatter fraction, `w` = seed.
     pub ring_pattern: Vec4,
+    /// [`RingEdge`](crate::RingEdge) packed by `RingEdge::pack`.
+    pub ring_edge: Vec4,
 }
 
 impl Default for LensData {
@@ -178,6 +180,7 @@ impl Default for LensData {
             black_color: Vec4::new(0.0, 0.0, 0.0, 1.0),
             ring_colors: [Vec4::ZERO; MAX_RING_COLORS],
             ring_pattern: Vec4::ZERO,
+            ring_edge: Vec4::ZERO,
         }
     }
 }

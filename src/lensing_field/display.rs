@@ -200,6 +200,7 @@ fn prepare_lensing_display_uniforms(
             black_color: extracted.lens_black_color[i],
             ring_colors: extracted.lens_ring_colors[i],
             ring_pattern: extracted.lens_ring_pattern[i],
+            ring_edge: extracted.lens_ring_edge[i],
         };
     }
 

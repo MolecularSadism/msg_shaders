@@ -86,7 +86,7 @@ pub mod prelude {
         ColorQuantizeUniforms, DitherPattern, HoleQuantization, LensingHoleCamera,
         LensingHolePlugin, MAX_NEBULA_LAYERS, MAX_PALETTE_COLORS, MAX_RING_COLORS, MAX_STAR_LAYERS,
         Nebula, NebulaLayer, NebulaMaterial, NebulaPlugin, PhotonRingPattern, PixelateConfig,
-        PixelateMaterial, PixelationPlugin, QuantizationConfig, QuantizePixelateMaterial,
+        PixelateMaterial, PixelationPlugin, QuantizationConfig, QuantizePixelateMaterial, RingEdge,
         StarLayer, lens_capture_extent,
     };
     #[cfg(feature = "render_2d")]
@@ -589,13 +589,15 @@ impl Default for BlackHoleOverlay {
 /// Maximum photon-ring colors a [`PhotonRingPattern`] uploads to the shader.
 pub const MAX_RING_COLORS: usize = 4;
 
-/// Multi-color photon ring for a [`BlackHoleOverlay`], picked per art-pixel cell.
+/// Multi-color photon ring for a [`BlackHoleOverlay`], picked per art-pixel
+/// cell.
 ///
 /// Rows of cells running along the ring share one color over `streak_length`
 /// cells, so the ring reads as streaks; a `scatter` fraction of cells instead
-/// picks its own color, breaking the streaks into a checkered speckle. The
-/// pattern rides with the hole's rotation. Colors past [`MAX_RING_COLORS`] are
-/// dropped, and an empty list falls back to the overlay's `photon_ring_color`.
+/// picks its own color, breaking the streaks into a checkered speckle. `edge`
+/// decides how the fading glow meets the scene. The pattern rides with the
+/// hole's rotation. Colors past [`MAX_RING_COLORS`] are dropped, and an empty
+/// list falls back to the overlay's additive `photon_ring_color` glow.
 #[derive(Debug, Clone, PartialEq, Reflect)]
 pub struct PhotonRingPattern {
     /// Ring colors (linear RGBA), each picked equally often.
@@ -606,6 +608,8 @@ pub struct PhotonRingPattern {
     pub scatter: f32,
     /// Varies the pattern without changing its statistics.
     pub seed: u32,
+    /// How the ring's outer bound turns into opaque cells.
+    pub edge: RingEdge,
 }
 
 impl Default for PhotonRingPattern {
@@ -615,26 +619,45 @@ impl Default for PhotonRingPattern {
             streak_length: 4.0,
             scatter: 0.3,
             seed: 0,
+            edge: RingEdge::default(),
         }
     }
 }
 
-impl PhotonRingPattern {
-    /// Packs the pattern for [`LensData`]: the color slots, and
-    /// `(color count, streak length, scatter, seed)`.
-    pub fn pack(&self) -> ([Vec4; MAX_RING_COLORS], Vec4) {
-        let mut colors = [Vec4::ZERO; MAX_RING_COLORS];
-        let count = self.colors.len().min(MAX_RING_COLORS);
-        for (slot, color) in colors.iter_mut().zip(&self.colors) {
-            *slot = Vec4::from_array(*color);
+/// How a [`PhotonRingPattern`]'s fading glow is drawn over the scene. The
+/// glow's strength at a cell, clamped to `0.0..=1.0`, is its coverage.
+#[derive(Debug, Clone, Copy, PartialEq, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum RingEdge {
+    /// Opaque where the coverage beats the ordered-dither threshold, so the
+    /// edge thins out into a dither. `DitherPattern::None` thresholds every
+    /// cell at one half.
+    Dither(DitherPattern),
+    /// Opaque where the coverage reaches this threshold: a hard edge.
+    Cutoff(f32),
+    /// Blended over the scene with the coverage as opacity.
+    Gradient,
+    /// Added onto the scene, scaled by the glow's strength.
+    Additive,
+}
+
+impl Default for RingEdge {
+    fn default() -> Self {
+        Self::Dither(DitherPattern::Bayer4x4)
+    }
+}
+
+impl RingEdge {
+    /// Packs the edge for [`LensData::ring_edge`]: `x` = mode (`0` dither,
+    /// `1` cutoff, `2` gradient, `3` additive), `y` = dither pattern, `z` =
+    /// cutoff threshold.
+    pub fn pack(self) -> Vec4 {
+        match self {
+            Self::Dither(pattern) => Vec4::new(0.0, pattern.as_u32() as f32, 0.0, 0.0),
+            Self::Cutoff(threshold) => Vec4::new(1.0, 0.0, threshold.clamp(0.0, 1.0), 0.0),
+            Self::Gradient => Vec4::new(2.0, 0.0, 0.0, 0.0),
+            Self::Additive => Vec4::new(3.0, 0.0, 0.0, 0.0),
         }
-        let params = Vec4::new(
-            count as f32,
-            self.streak_length.max(1.0),
-            self.scatter.clamp(0.0, 1.0),
-            self.seed as f32,
-        );
-        (colors, params)
     }
 }
 
@@ -721,8 +744,8 @@ fn drive_lensing(
         // Z-rotation of the hole entity, used by the shader to rotate the pixel
         // grid into the hole's own frame so the pixelation spins with it.
         let rotation = gt.rotation().to_euler(EulerRot::ZYX).0;
-        let (ring_colors, ring_pattern) = hole.photon_ring_pattern.as_ref().map_or(
-            ([Vec4::ZERO; MAX_RING_COLORS], Vec4::ZERO),
+        let (ring_colors, ring_pattern, ring_edge) = hole.photon_ring_pattern.as_ref().map_or(
+            ([Vec4::ZERO; MAX_RING_COLORS], Vec4::ZERO, Vec4::ZERO),
             PhotonRingPattern::pack,
         );
 
@@ -744,6 +767,7 @@ fn drive_lensing(
                 black_color: Vec4::from_array(hole.black_color),
                 ring_colors,
                 ring_pattern,
+                ring_edge,
             },
         ));
     }
@@ -810,7 +834,7 @@ mod photon_ring_pattern_tests {
             colors: colors.clone(),
             ..default()
         };
-        let (packed, params) = pattern.pack();
+        let (packed, params, _) = pattern.pack();
         assert_eq!(params.x, MAX_RING_COLORS as f32);
         for (slot, color) in packed.iter().zip(&colors) {
             assert_eq!(*slot, Vec4::from_array(*color));
@@ -824,16 +848,29 @@ mod photon_ring_pattern_tests {
             streak_length: 0.0,
             scatter: 2.0,
             seed: 7,
+            edge: RingEdge::default(),
         };
-        let (_, params) = pattern.pack();
+        let (_, params, _) = pattern.pack();
         assert_eq!(params.y, 1.0);
         assert_eq!(params.z, 1.0);
         assert_eq!(params.w, 7.0);
     }
 
     #[test]
+    fn cutoff_edge_clamps_its_threshold() {
+        assert_eq!(RingEdge::Cutoff(1.5).pack(), Vec4::new(1.0, 0.0, 1.0, 0.0));
+    }
+
+    #[test]
+    fn dither_edge_packs_its_pattern() {
+        let packed = RingEdge::Dither(DitherPattern::Bayer8x8).pack();
+        assert_eq!(packed.x, 0.0);
+        assert_eq!(packed.y, DitherPattern::Bayer8x8.as_u32() as f32);
+    }
+
+    #[test]
     fn empty_pattern_packs_zero_colors() {
-        let (_, params) = PhotonRingPattern::default().pack();
+        let (_, params, _) = PhotonRingPattern::default().pack();
         assert_eq!(params.x, 0.0);
     }
 }
