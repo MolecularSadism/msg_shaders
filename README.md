@@ -13,7 +13,7 @@ track the game's needs.
 | Effect | Plugin | What it does |
 |--------|--------|--------------|
 | Black hole | `BlackHolePlugin` | Schwarzschild black-hole material on a quad: accretion disc, photon ring, Doppler beaming, relativistic lensing. Based on [Eric Bruneton's black_hole_shader](https://github.com/ebruneton/black_hole_shader). |
-| Gravitational lensing | `LensingHolePlugin` | Screen-space warp of the camera's view, driven by a GPU-simulated deflection field. Generic `LightDeflector` sources (lens / ring / line); optional `BlackHoleOverlay` photon-ring + event-horizon discs. |
+| Gravitational lensing | `LensingHolePlugin` | Screen-space warp of the camera's view, driven by a GPU-simulated deflection field. Generic `LightDeflector` sources (lens / ring / line); optional `BlackHoleOverlay` photon-ring + event-horizon discs, with an optional multi-color streaked `PhotonRingPattern` ring. |
 | Color quantization | `ColorQuantizationPlugin` | Nearest-palette quantization in Oklab space with Bayer dithering — a material plus a WGSL function library other shaders can `#import`. |
 | Pixelation | `PixelationPlugin` | World-anchored pixelation — material plus WGSL function library. |
 | Nebula + starfield | `NebulaPlugin` | A stack of procedural nebula cloud layers (each its own noise, three-stop color ramp, and parallax) composited over a base color, plus a stack of twinkling star layers. Snapped to the art-pixel grid and reduced to a palette with dithering; stars pulse (winking fully dark) and shift color over time. Reuses the quantization and pixelation modules. |
@@ -125,7 +125,7 @@ cargo run --example lensing
 
 | msg_shaders | Bevy | Rust |
 |-------------|------|------|
-| 0.2-0.4 | 0.18 | 1.85+ (edition 2024) |
+| 0.2-0.5 | 0.18 | 1.85+ (edition 2024) |
 
 ## Installation
 
@@ -133,7 +133,7 @@ Not yet on crates.io — depend on the repository:
 
 ```toml
 [dependencies]
-msg_shaders = { git = "https://github.com/MolecularSadism/msg_shaders", tag = "v0.4.1" }
+msg_shaders = { git = "https://github.com/MolecularSadism/msg_shaders", tag = "v0.5.0" }
 ```
 
 The one studio dependency is

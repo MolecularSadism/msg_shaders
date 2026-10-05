@@ -10,7 +10,7 @@ use bevy::{
 };
 
 use crate::{
-    ColorQuantizeUniforms, LensData, MAX_LENSES,
+    ColorQuantizeUniforms, LensData, MAX_LENSES, MAX_RING_COLORS,
     lensing_field::{
         LensingFieldSettings,
         sources::{DeflectionSource, MAX_DEFLECTION_SOURCES},
@@ -47,6 +47,9 @@ pub struct ExtractedLensingField {
     pub lens_strength_ring: [Vec4; MAX_LENSES],
     pub lens_photon_ring_color: [Vec4; MAX_LENSES],
     pub lens_black_color: [Vec4; MAX_LENSES],
+    pub lens_ring_colors: [[Vec4; MAX_RING_COLORS]; MAX_LENSES],
+    pub lens_ring_pattern: [Vec4; MAX_LENSES],
+    pub lens_ring_edge: [Vec4; MAX_LENSES],
     pub canvas_center_extent: Vec4,
     /// Palette for quantizing the photon-ring / shadow-edge region of the
     /// display pass. `palette_size == 0` disables quantization.
@@ -75,6 +78,9 @@ impl Default for ExtractedLensingField {
             lens_strength_ring: [Vec4::ZERO; MAX_LENSES],
             lens_photon_ring_color: [Vec4::ZERO; MAX_LENSES],
             lens_black_color: [Vec4::ZERO; MAX_LENSES],
+            lens_ring_colors: [[Vec4::ZERO; MAX_RING_COLORS]; MAX_LENSES],
+            lens_ring_pattern: [Vec4::ZERO; MAX_LENSES],
+            lens_ring_edge: [Vec4::ZERO; MAX_LENSES],
             canvas_center_extent: Vec4::new(0.0, 0.0, 1.0, 1.0),
             ring_quantization: ColorQuantizeUniforms::default(),
             ring_quantization_lut: Handle::default(),
@@ -104,6 +110,9 @@ pub struct LensingFieldExtractSource {
     pub lens_strength_ring: [Vec4; MAX_LENSES],
     pub lens_photon_ring_color: [Vec4; MAX_LENSES],
     pub lens_black_color: [Vec4; MAX_LENSES],
+    pub lens_ring_colors: [[Vec4; MAX_RING_COLORS]; MAX_LENSES],
+    pub lens_ring_pattern: [Vec4; MAX_LENSES],
+    pub lens_ring_edge: [Vec4; MAX_LENSES],
     pub canvas_center_extent: Vec4,
     pub ring_quantization: ColorQuantizeUniforms,
     /// Baked nearest-palette LUT for `ring_quantization`, rebuilt only when the
@@ -123,6 +132,9 @@ impl Default for LensingFieldExtractSource {
             lens_strength_ring: [Vec4::ZERO; MAX_LENSES],
             lens_photon_ring_color: [Vec4::ZERO; MAX_LENSES],
             lens_black_color: [Vec4::ZERO; MAX_LENSES],
+            lens_ring_colors: [[Vec4::ZERO; MAX_RING_COLORS]; MAX_LENSES],
+            lens_ring_pattern: [Vec4::ZERO; MAX_LENSES],
+            lens_ring_edge: [Vec4::ZERO; MAX_LENSES],
             canvas_center_extent: Vec4::new(0.0, 0.0, 1.0, 1.0),
             ring_quantization: ColorQuantizeUniforms::default(),
             ring_quantization_lut: Handle::default(),
@@ -201,6 +213,9 @@ fn rebuild_extracted_lensing_field(
         lens_center_size_shadow: source.lens_center_size_shadow,
         lens_strength_ring: source.lens_strength_ring,
         lens_photon_ring_color: source.lens_photon_ring_color,
+        lens_ring_colors: source.lens_ring_colors,
+        lens_ring_pattern: source.lens_ring_pattern,
+        lens_ring_edge: source.lens_ring_edge,
         lens_black_color: source.lens_black_color,
         canvas_center_extent: source.canvas_center_extent,
         ring_quantization: source.ring_quantization,
@@ -243,10 +258,16 @@ pub fn update_lensing_field_source(
     let mut sr = [Vec4::ZERO; MAX_LENSES];
     let mut ring = [Vec4::ZERO; MAX_LENSES];
     let mut black = [Vec4::ZERO; MAX_LENSES];
+    let mut ring_colors = [[Vec4::ZERO; MAX_RING_COLORS]; MAX_LENSES];
+    let mut ring_pattern = [Vec4::ZERO; MAX_LENSES];
+    let mut ring_edge = [Vec4::ZERO; MAX_LENSES];
     for (i, lens) in lenses.iter().take(MAX_LENSES).enumerate() {
         css[i] = lens.center_size_shadow;
         sr[i] = lens.strength_ring;
         ring[i] = lens.photon_ring_color;
+        ring_colors[i] = lens.ring_colors;
+        ring_pattern[i] = lens.ring_pattern;
+        ring_edge[i] = lens.ring_edge;
         // Pre-snap the solid shadow fill into the ring palette here, so the
         // event-horizon interior writes a constant color in the display shader
         // rather than running the per-pixel palette match across the whole
@@ -258,4 +279,7 @@ pub fn update_lensing_field_source(
     source.lens_strength_ring = sr;
     source.lens_photon_ring_color = ring;
     source.lens_black_color = black;
+    source.lens_ring_colors = ring_colors;
+    source.lens_ring_pattern = ring_pattern;
+    source.lens_ring_edge = ring_edge;
 }
