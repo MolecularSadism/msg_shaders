@@ -474,7 +474,7 @@ fn resize_nebula_meshes(
         if built.0 == nebula.size {
             continue;
         }
-        let Some(mesh) = meshes.get_mut(&handle.0) else {
+        let Some(mut mesh) = meshes.get_mut(&handle.0) else {
             continue;
         };
         *mesh = Mesh::from(Rectangle::new(nebula.size.x, nebula.size.y));
@@ -491,7 +491,7 @@ fn animate_nebula(
 ) {
     let elapsed = time.elapsed_secs();
     for (nebula, handle) in &query {
-        let Some(material) = materials.get_mut(&handle.0) else {
+        let Some(mut material) = materials.get_mut(&handle.0) else {
             continue;
         };
         material.uniforms = nebula.to_uniforms(elapsed);

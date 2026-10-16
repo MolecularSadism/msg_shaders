@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/MolecularSadism/msg_shaders/workflows/CI/badge.svg)](https://github.com/MolecularSadism/msg_shaders/actions)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/MolecularSadism/msg_shaders#license)
-[![Bevy](https://img.shields.io/badge/Bevy-0.18-blue.svg)](https://bevyengine.org/)
+[![Bevy](https://img.shields.io/badge/Bevy-0.19-blue.svg)](https://bevyengine.org/)
 [![Rust](https://img.shields.io/badge/rust-2024%20edition-orange.svg)](https://www.rust-lang.org/)
 
 Shader effects for [Bevy](https://bevyengine.org): black holes, gravitational
@@ -125,6 +125,7 @@ cargo run --example lensing
 
 | msg_shaders | Bevy | Rust |
 |-------------|------|------|
+| 0.6 | 0.19 | 1.95+ (edition 2024) |
 | 0.2-0.5 | 0.18 | 1.85+ (edition 2024) |
 
 ## Installation
@@ -133,19 +134,19 @@ Not yet on crates.io — depend on the repository:
 
 ```toml
 [dependencies]
-msg_shaders = { git = "https://github.com/MolecularSadism/msg_shaders", tag = "v0.5.0" }
+msg_shaders = { git = "https://github.com/MolecularSadism/msg_shaders", tag = "v0.6.0" }
 ```
 
 The one studio dependency is
 [`msg_post_process`](https://github.com/MolecularSadism/msg_post_process), a
-small render-graph ordering helper, itself pulled in as a `git` dependency. A
+small post-process pass ordering helper, itself pulled in as a `git` dependency. A
 `Cargo.lock` is committed for reproducible builds.
 
 ## Tests
 
 `cargo test` validates all WGSL shaders offline via naga (no GPU needed) and
 runs the unit tests. The same checks run in CI
-(`.github/workflows/ci.yml`).
+(`.github/workflows/ci.yml`, which calls the shared Bevy 0.19 CI template).
 
 ## License
 

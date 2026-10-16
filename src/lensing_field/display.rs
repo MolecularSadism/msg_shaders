@@ -12,14 +12,11 @@
 // there. The per-lens photon-ring and event-horizon discs are drawn on top in
 // world space, matching the field's source lenses.
 
-use bevy::core_pipeline::FullscreenShader;
-use bevy::core_pipeline::core_2d::graph::{Core2d, Node2d};
-use bevy::ecs::query::QueryItem;
+use bevy::core_pipeline::{Core2d, Core2dSystems, FullscreenShader};
 use bevy::prelude::*;
 use bevy::render::camera::ExtractedCamera;
 use bevy::render::extract_component::ExtractComponentPlugin;
 use bevy::render::render_asset::RenderAssets;
-use bevy::render::render_graph::{NodeRunError, RenderGraphContext, RenderLabel, ViewNode};
 use bevy::render::render_resource::binding_types::{
     sampler, texture_2d, texture_3d, uniform_buffer,
 };
@@ -31,7 +28,7 @@ use bevy::render::render_resource::{
     ShaderStages, ShaderType, SpecializedRenderPipeline, SpecializedRenderPipelines, TextureFormat,
     TextureSampleType, UniformBuffer,
 };
-use bevy::render::renderer::{RenderContext, RenderDevice, RenderQueue};
+use bevy::render::renderer::{RenderContext, RenderDevice, RenderQueue, ViewQuery};
 use bevy::render::texture::GpuImage;
 use bevy::render::view::{ExtractedView, ViewTarget};
 use bevy::render::{Render, RenderApp, RenderSystems};
@@ -219,7 +216,7 @@ fn prepare_lensing_display_uniforms(
     uniforms.buffer.write_buffer(&render_device, &render_queue);
 }
 
-/// Cached pipeline id for a view, specialized on its `ViewTarget` format.
+/// Cached pipeline id for a view, specialized on its target format.
 #[derive(Component, Clone, Copy)]
 struct LensingDisplayPipelineId(CachedRenderPipelineId);
 
@@ -228,107 +225,100 @@ fn queue_lensing_display_pipelines(
     pipeline_cache: Res<PipelineCache>,
     pipeline: Res<LensingDisplayPipeline>,
     mut specialized: ResMut<SpecializedRenderPipelines<LensingDisplayPipeline>>,
-    views: Query<(Entity, &ViewTarget), With<LensingHoleCamera>>,
+    views: Query<(Entity, &ExtractedView), With<LensingHoleCamera>>,
 ) {
-    for (entity, view_target) in &views {
+    for (entity, view) in &views {
         let id = specialized.specialize(
             &pipeline_cache,
             &pipeline,
             LensingDisplayPipelineKey {
-                target_format: view_target.main_texture_format(),
+                target_format: view.target_format,
             },
         );
         commands.entity(entity).insert(LensingDisplayPipelineId(id));
     }
 }
 
-#[derive(Default)]
-struct LensingDisplayNode;
-
-impl ViewNode for LensingDisplayNode {
-    type ViewQuery = (&'static ViewTarget, &'static LensingDisplayPipelineId);
-
-    fn run<'w>(
-        &self,
-        _graph: &mut RenderGraphContext,
-        render_context: &mut RenderContext<'w>,
-        (view_target, pipeline_id): QueryItem<'w, '_, Self::ViewQuery>,
-        world: &'w World,
-    ) -> Result<(), NodeRunError> {
-        let extracted = world.resource::<ExtractedLensingField>();
-        // No deflection sources: the field is empty, so leave the view untouched
-        // (the scene passes straight through to the downstream post-processing
-        // stack). Sources without a visual lens (rings, lines) still warp here;
-        // they just draw no disc, because the per-lens loop is keyed on the
-        // visual `lens_count`.
-        if extracted.source_count == 0 {
-            return Ok(());
-        }
-
-        let pipeline_cache = world.resource::<PipelineCache>();
-        let pipeline = world.resource::<LensingDisplayPipeline>();
-        // `get_render_pipeline` returns `None` both while the pipeline is still
-        // compiling and after a compile error, so surface the error state — a
-        // WGSL fault would otherwise make this node a silent no-op (the scene
-        // passes through unwarped with no log).
-        if let CachedPipelineState::Err(e) = pipeline_cache.get_render_pipeline_state(pipeline_id.0)
-        {
-            bevy::log::error!("lensing_display pipeline error: {e}");
-            return Ok(());
-        }
-        let Some(render_pipeline) = pipeline_cache.get_render_pipeline(pipeline_id.0) else {
-            return Ok(());
-        };
-
-        let gpu_images = world.resource::<RenderAssets<GpuImage>>();
-        let Some(field) = gpu_images.get(&extracted.velocity_write) else {
-            return Ok(());
-        };
-        // Baked palette LUT for the ring-band quantization. Missing only on the
-        // first frame before the image uploads; skip the pass until it's ready
-        // rather than binding a mismatched texture.
-        let Some(lut) = gpu_images.get(&extracted.ring_quantization_lut) else {
-            return Ok(());
-        };
-
-        let uniforms = world.resource::<LensingDisplayUniforms>();
-        let Some(uniform_binding) = uniforms.buffer.binding() else {
-            return Ok(());
-        };
-
-        let post_process = view_target.post_process_write();
-        let layout = pipeline_cache.get_bind_group_layout(&pipeline.layout);
-        let bind_group = render_context.render_device().create_bind_group(
-            "lensing_display_bind_group",
-            &layout,
-            &BindGroupEntries::sequential((
-                post_process.source,
-                &pipeline.scene_sampler,
-                &field.texture_view,
-                &pipeline.field_sampler,
-                uniform_binding,
-                &lut.texture_view,
-            )),
-        );
-
-        let mut render_pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
-            label: Some("lensing_display_pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: post_process.destination,
-                resolve_target: None,
-                ops: Operations::default(),
-                depth_slice: None,
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-        render_pass.set_render_pipeline(render_pipeline);
-        render_pass.set_bind_group(0, &bind_group, &[]);
-        render_pass.draw(0..3, 0..1);
-
-        Ok(())
+/// Warps the current view's target by the deflection field.
+fn lensing_display_pass(
+    view: ViewQuery<(&ViewTarget, &LensingDisplayPipelineId)>,
+    extracted: Res<ExtractedLensingField>,
+    pipeline_cache: Res<PipelineCache>,
+    pipeline: Option<Res<LensingDisplayPipeline>>,
+    gpu_images: Res<RenderAssets<GpuImage>>,
+    uniforms: Res<LensingDisplayUniforms>,
+    mut render_context: RenderContext,
+) {
+    let (view_target, pipeline_id) = view.into_inner();
+    // No deflection sources: the field is empty, so leave the view untouched
+    // (the scene passes straight through to the downstream post-processing
+    // stack). Sources without a visual lens (rings, lines) still warp here;
+    // they just draw no disc, because the per-lens loop is keyed on the
+    // visual `lens_count`.
+    if extracted.source_count == 0 {
+        return;
     }
+
+    let Some(pipeline) = pipeline else {
+        return;
+    };
+    // `get_render_pipeline` returns `None` both while the pipeline is still
+    // compiling and after a compile error, so surface the error state — a
+    // WGSL fault would otherwise make this node a silent no-op (the scene
+    // passes through unwarped with no log).
+    if let CachedPipelineState::Err(e) = pipeline_cache.get_render_pipeline_state(pipeline_id.0) {
+        bevy::log::error!("lensing_display pipeline error: {e}");
+        return;
+    }
+    let Some(render_pipeline) = pipeline_cache.get_render_pipeline(pipeline_id.0) else {
+        return;
+    };
+
+    let Some(field) = gpu_images.get(&extracted.velocity_write) else {
+        return;
+    };
+    // Baked palette LUT for the ring-band quantization. Missing only on the
+    // first frame before the image uploads; skip the pass until it's ready
+    // rather than binding a mismatched texture.
+    let Some(lut) = gpu_images.get(&extracted.ring_quantization_lut) else {
+        return;
+    };
+
+    let Some(uniform_binding) = uniforms.buffer.binding() else {
+        return;
+    };
+
+    let post_process = view_target.post_process_write();
+    let layout = pipeline_cache.get_bind_group_layout(&pipeline.layout);
+    let bind_group = render_context.render_device().create_bind_group(
+        "lensing_display_bind_group",
+        &layout,
+        &BindGroupEntries::sequential((
+            post_process.source,
+            &pipeline.scene_sampler,
+            &field.texture_view,
+            &pipeline.field_sampler,
+            uniform_binding,
+            &lut.texture_view,
+        )),
+    );
+
+    let mut render_pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
+        label: Some("lensing_display_pass"),
+        color_attachments: &[Some(RenderPassColorAttachment {
+            view: post_process.destination,
+            resolve_target: None,
+            ops: Operations::default(),
+            depth_slice: None,
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    render_pass.set_render_pipeline(render_pipeline);
+    render_pass.set_bind_group(0, &bind_group, &[]);
+    render_pass.draw(0..3, 0..1);
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
@@ -415,25 +405,25 @@ impl SpecializedRenderPipeline for LensingDisplayPipeline {
             primitive: PrimitiveState::default(),
             depth_stencil: None,
             multisample: MultisampleState::default(),
-            push_constant_ranges: vec![],
+            immediate_size: 0,
             zero_initialize_workgroup_memory: false,
         }
     }
 }
 
-/// Render-graph label for the lensing display pass.
+/// System set holding the lensing display pass in the [`Core2d`] schedule.
 ///
 /// Exposed so the host can order it relative to other post-process passes, e.g.
-/// `app.render_after(LensingDisplayLabel, RcCompositeLabel)` to warp the lit
-/// scene.
-#[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
-pub struct LensingDisplayLabel;
+/// `app.render_after(Core2d, LensingDisplaySystems, RcCompositeSystems)` to warp the
+/// lit scene.
+#[derive(Debug, Hash, PartialEq, Eq, Clone, SystemSet)]
+pub struct LensingDisplaySystems;
 
-/// Registers the full-screen lensing display pass as a post-process node.
+/// Registers the full-screen lensing display pass as a post-process pass.
 ///
 /// By default it runs between the main pass and the post-processing stack. The
 /// host can refine the ordering — e.g. place it after a lighting composite so it
-/// warps lit pixels — via [`LensingDisplayLabel`].
+/// warps lit pixels — via [`LensingDisplaySystems`].
 pub(crate) struct LensingDisplayPlugin;
 
 impl Plugin for LensingDisplayPlugin {
@@ -443,13 +433,13 @@ impl Plugin for LensingDisplayPlugin {
         app.add_plugins(ExtractComponentPlugin::<LensingHoleCamera>::default());
         // Default placement: a full-screen pass between the main pass and the
         // post-processing stack. The host can additionally order it after a
-        // lighting pass so it warps lit pixels — see [`LensingDisplayLabel`].
-        app.add_post_process_node::<LensingDisplayNode>(Core2d, LensingDisplayLabel);
+        // lighting pass so it warps lit pixels — see [`LensingDisplaySystems`].
+        app.add_post_process_pass(Core2d, LensingDisplaySystems, lensing_display_pass);
         app.render_between(
             Core2d,
-            LensingDisplayLabel,
-            Node2d::EndMainPass,
-            Node2d::StartMainPassPostProcessing,
+            LensingDisplaySystems,
+            Core2dSystems::MainPass,
+            Core2dSystems::PostProcess,
         );
 
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {

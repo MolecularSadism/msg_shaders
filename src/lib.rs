@@ -50,7 +50,7 @@ use bevy::render::extract_component::ExtractComponent;
 #[cfg(feature = "render_2d")]
 pub use lensing_field::{
     LENSING_FIELD_RES, LensingFieldPlugin, LensingFieldSettings, LensingFieldTextures,
-    display::LensingDisplayLabel,
+    display::LensingDisplaySystems,
     sources::{
         DeflectionShape, DeflectionSource, LightDeflectionRequest, LightDeflector,
         MAX_DEFLECTION_SOURCES, RING_EDGE_FADE,
@@ -471,7 +471,7 @@ fn update_blackhole_time_3d(
     let elapsed = time.elapsed_secs_f64();
 
     for material_handle in &query {
-        if let Some(material) = materials.get_mut(&material_handle.0) {
+        if let Some(mut material) = materials.get_mut(&material_handle.0) {
             material.uniforms.time = looped_time(elapsed, material.uniforms.spin);
         }
     }
@@ -486,7 +486,7 @@ fn update_blackhole_time_2d(
     let elapsed = time.elapsed_secs_f64();
 
     for material_handle in &query {
-        if let Some(material) = materials.get_mut(&material_handle.0) {
+        if let Some(mut material) = materials.get_mut(&material_handle.0) {
             material.uniforms.time = looped_time(elapsed, material.uniforms.spin);
         }
     }
