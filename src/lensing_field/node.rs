@@ -1,15 +1,12 @@
-// Render-graph node for the lensing-field flow simulation.
+// Render pass for the lensing-field flow simulation.
 //
 // Per frame: inject (write decayed previous + per-cell Schwarzschild force
 // into `velocity_read`), then semi-Lagrangian advect (read `velocity_read`,
 // write `velocity_write`). The lensing display pass samples `velocity_write`.
 
-use bevy::core_pipeline::core_2d::graph::{Core2d, Node2d};
+use bevy::core_pipeline::{Core2d, Core2dSystems};
 use bevy::prelude::*;
 use bevy::render::render_asset::RenderAssets;
-use bevy::render::render_graph::{
-    NodeRunError, RenderGraphContext, RenderGraphExt, RenderLabel, ViewNode, ViewNodeRunner,
-};
 use bevy::render::render_resource::{
     BindGroup, BindGroupEntries, CachedPipelineState, ComputePassDescriptor, PipelineCache,
 };
@@ -21,9 +18,6 @@ use crate::lensing_field::{extract::ExtractedLensingField, pipelines::LensingFie
 
 const WORKGROUP_SIZE: u32 = 8;
 const FIELD_DISPATCH: u32 = crate::lensing_field::LENSING_FIELD_RES / WORKGROUP_SIZE;
-
-#[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
-pub(crate) struct LensingFieldLabel;
 
 /// Bind groups built each frame once the GPU images are ready.
 ///
@@ -86,89 +80,78 @@ pub(crate) fn prepare_lensing_field_bind_groups(
     ));
 }
 
-#[derive(Default)]
-pub(crate) struct LensingFieldNode;
+/// Runs the inject and advect compute passes for the current view.
+pub(crate) fn lensing_field_pass(
+    extracted: Res<ExtractedLensingField>,
+    bind_groups: Res<LensingFieldBindGroups>,
+    pipelines: Option<Res<LensingFieldPipelines>>,
+    pipeline_cache: Res<PipelineCache>,
+    mut render_context: RenderContext,
+) {
+    if extracted.source_count == 0 {
+        return;
+    }
 
-impl ViewNode for LensingFieldNode {
-    type ViewQuery = ();
+    let (Some(g0), Some(g1_inject), Some(g1_advect)) = (
+        bind_groups.g0.as_ref(),
+        bind_groups.g1_inject.as_ref(),
+        bind_groups.g1_advect.as_ref(),
+    ) else {
+        return;
+    };
 
-    fn run<'w>(
-        &self,
-        _graph: &mut RenderGraphContext,
-        render_context: &mut RenderContext<'w>,
-        (): (),
-        world: &'w World,
-    ) -> Result<(), NodeRunError> {
-        let extracted = world.resource::<ExtractedLensingField>();
-        if extracted.source_count == 0 {
-            return Ok(());
-        }
+    let Some(pipelines) = pipelines else {
+        return;
+    };
 
-        let bind_groups = world.resource::<LensingFieldBindGroups>();
-        let (Some(g0), Some(g1_inject), Some(g1_advect)) = (
-            bind_groups.g0.as_ref(),
-            bind_groups.g1_inject.as_ref(),
-            bind_groups.g1_advect.as_ref(),
-        ) else {
-            return Ok(());
-        };
-
-        let Some(pipelines) = world.get_resource::<LensingFieldPipelines>() else {
-            return Ok(());
-        };
-        let pipeline_cache = world.resource::<PipelineCache>();
-
-        for &id in &[pipelines.pipeline_inject, pipelines.pipeline_advect] {
-            match pipeline_cache.get_compute_pipeline_state(id) {
-                CachedPipelineState::Ok(_) => {}
-                CachedPipelineState::Err(e) => {
-                    bevy::log::error!("lensing_field pipeline error: {e}");
-                    return Ok(());
-                }
-                _ => return Ok(()),
+    for &id in &[pipelines.pipeline_inject, pipelines.pipeline_advect] {
+        match pipeline_cache.get_compute_pipeline_state(id) {
+            CachedPipelineState::Ok(_) => {}
+            CachedPipelineState::Err(e) => {
+                bevy::log::error!("lensing_field pipeline error: {e}");
+                return;
             }
+            _ => return,
         }
+    }
 
-        let pipe_inject = pipeline_cache
-            .get_compute_pipeline(pipelines.pipeline_inject)
-            .unwrap();
-        let pipe_advect = pipeline_cache
-            .get_compute_pipeline(pipelines.pipeline_advect)
-            .unwrap();
+    let pipe_inject = pipeline_cache
+        .get_compute_pipeline(pipelines.pipeline_inject)
+        .unwrap();
+    let pipe_advect = pipeline_cache
+        .get_compute_pipeline(pipelines.pipeline_advect)
+        .unwrap();
 
-        // Two separate compute passes so wgpu's resource tracker can insert a
-        // Vulkan pipeline barrier between them. inject writes velocity_read;
-        // advect reads it — a single pass cannot barrier between its own
-        // dispatches, which produces a write→read hazard on Vulkan.
-        {
-            let mut pass =
-                render_context
-                    .command_encoder()
-                    .begin_compute_pass(&ComputePassDescriptor {
-                        label: Some("lensing_field_inject"),
-                        timestamp_writes: None,
-                    });
-            pass.set_pipeline(pipe_inject);
-            pass.set_bind_group(0, g0, &[]);
-            pass.set_bind_group(1, g1_inject, &[]);
-            pass.dispatch_workgroups(FIELD_DISPATCH, FIELD_DISPATCH, 1);
-        }
+    // Two separate compute passes so wgpu's resource tracker can insert a
+    // Vulkan pipeline barrier between them. inject writes velocity_read;
+    // advect reads it — a single pass cannot barrier between its own
+    // dispatches, which produces a write→read hazard on Vulkan.
+    {
+        let mut pass =
+            render_context
+                .command_encoder()
+                .begin_compute_pass(&ComputePassDescriptor {
+                    label: Some("lensing_field_inject"),
+                    timestamp_writes: None,
+                });
+        pass.set_pipeline(pipe_inject);
+        pass.set_bind_group(0, g0, &[]);
+        pass.set_bind_group(1, g1_inject, &[]);
+        pass.dispatch_workgroups(FIELD_DISPATCH, FIELD_DISPATCH, 1);
+    }
 
-        {
-            let mut pass =
-                render_context
-                    .command_encoder()
-                    .begin_compute_pass(&ComputePassDescriptor {
-                        label: Some("lensing_field_advect"),
-                        timestamp_writes: None,
-                    });
-            pass.set_pipeline(pipe_advect);
-            pass.set_bind_group(0, g0, &[]);
-            pass.set_bind_group(1, g1_advect, &[]);
-            pass.dispatch_workgroups(FIELD_DISPATCH, FIELD_DISPATCH, 1);
-        }
-
-        Ok(())
+    {
+        let mut pass =
+            render_context
+                .command_encoder()
+                .begin_compute_pass(&ComputePassDescriptor {
+                    label: Some("lensing_field_advect"),
+                    timestamp_writes: None,
+                });
+        pass.set_pipeline(pipe_advect);
+        pass.set_bind_group(0, g0, &[]);
+        pass.set_bind_group(1, g1_advect, &[]);
+        pass.dispatch_workgroups(FIELD_DISPATCH, FIELD_DISPATCH, 1);
     }
 }
 
@@ -188,9 +171,8 @@ impl Plugin for LensingFieldNodePlugin {
                     .in_set(RenderSystems::PrepareBindGroups)
                     .run_if(resource_exists::<LensingFieldPipelines>),
             )
-            .add_render_graph_node::<ViewNodeRunner<LensingFieldNode>>(Core2d, LensingFieldLabel)
             // The simulation must finish before the 2D main pass samples the
             // velocity texture in the lensing display pass.
-            .add_render_graph_edges(Core2d, (LensingFieldLabel, Node2d::StartMainPass));
+            .add_systems(Core2d, lensing_field_pass.before(Core2dSystems::MainPass));
     }
 }
