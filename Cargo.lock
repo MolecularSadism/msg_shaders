@@ -3434,7 +3434,7 @@ dependencies = [
 [[package]]
 name = "msg_post_process"
 version = "0.2.0"
-source = "git+https://github.com/MolecularSadism/msg_post_process?branch=claude%2Fbevy-019-avian-migration-l6xgu2#b9719f3aa1e2ea0b4663d51b0aefb8c2c558c4c4"
+source = "git+https://github.com/MolecularSadism/msg_post_process?tag=v0.2.0#501c792e7f8390a946caa79cd23b174675dc5f76"
 dependencies = [
  "bevy",
 ]

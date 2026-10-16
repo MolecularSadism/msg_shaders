@@ -34,7 +34,7 @@ bevy = { version = "0.19", default-features = false, features = [
 ] }
 serde = { version = "1", features = ["derive"], optional = true }
 smallvec = "1.15.1"
-msg_post_process = { git = "https://github.com/MolecularSadism/msg_post_process", branch = "claude/bevy-019-avian-migration-l6xgu2" }
+msg_post_process = { git = "https://github.com/MolecularSadism/msg_post_process", tag = "v0.2.0" }
 
 [dev-dependencies]
 # Offline validation of the pure-WGSL compute shaders (no GPU required).
