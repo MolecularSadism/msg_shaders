@@ -1,6 +1,6 @@
 [package]
 name = "msg_shaders"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 authors = ["ffmulks <63452434+ffmulks@users.noreply.github.com>"]
 license = "MIT OR Apache-2.0"
@@ -13,7 +13,7 @@ categories = ["game-development", "rendering", "graphics"]
 [features]
 default = ["render_2d"]
 render_2d = []
-render_3d = []
+render_3d = ["bevy/bevy_pbr"]
 # Derive `Serialize`/`Deserialize` on the plain-data settings enums and the
 # `BlackHole`/`HoleQuantization` config types, so a game can author them
 # straight from its own config files. The config structs use struct-level
@@ -28,7 +28,6 @@ bevy = { version = "0.19", default-features = false, features = [
     "bevy_image",
     "bevy_log",
     "bevy_render",
-    "bevy_pbr",
     "bevy_sprite",
     "bevy_sprite_render",
 ] }
