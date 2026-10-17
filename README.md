@@ -134,7 +134,7 @@ Not yet on crates.io — depend on the repository:
 
 ```toml
 [dependencies]
-msg_shaders = { git = "https://github.com/MolecularSadism/msg_shaders", tag = "v0.7.0" }
+msg_shaders = { git = "https://github.com/MolecularSadism/msg_shaders", tag = "v0.6.1" }
 ```
 
 The one studio dependency is
