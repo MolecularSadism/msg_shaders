@@ -113,7 +113,7 @@ cargo run --example lensing
 ## Feature flags
 
 - `render_2d` (default) — `Mesh2d` materials and the screen-space lensing pipeline
-- `render_3d` — `Mesh3d` variant of the black-hole material
+- `render_3d` — `Mesh3d` variant of the black-hole material; enables Bevy's `bevy_pbr`
 - `serde` — `Serialize`/`Deserialize` on the plain-data settings enums and the `BlackHole`,
   `BlackHoleColors`, `BlackHoleGeometry`, and `HoleQuantization` config types, so a game can
   author them straight from its own config files. The config structs use struct-level
@@ -134,7 +134,7 @@ Not yet on crates.io — depend on the repository:
 
 ```toml
 [dependencies]
-msg_shaders = { git = "https://github.com/MolecularSadism/msg_shaders", tag = "v0.6.0" }
+msg_shaders = { git = "https://github.com/MolecularSadism/msg_shaders", tag = "v0.7.0" }
 ```
 
 The one studio dependency is
