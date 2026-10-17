@@ -13,7 +13,6 @@ categories = ["game-development", "rendering", "graphics"]
 [features]
 default = ["render_2d"]
 render_2d = []
-# The `Mesh3d` black-hole material; brings in Bevy's PBR renderer.
 render_3d = ["bevy/bevy_pbr"]
 # Derive `Serialize`/`Deserialize` on the plain-data settings enums and the
 # `BlackHole`/`HoleQuantization` config types, so a game can author them
