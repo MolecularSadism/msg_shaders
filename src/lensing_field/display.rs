@@ -36,7 +36,7 @@ use bevy::shader::Shader;
 use msg_post_process::PostProcessAppExt;
 
 use crate::lensing_field::extract::ExtractedLensingField;
-use crate::{ColorQuantizeUniforms, LensData, LensingHoleCamera, MAX_LENSES};
+use crate::{ColorQuantizeUniforms, DiscData, LensData, LensingHoleCamera, MAX_DISCS, MAX_LENSES};
 
 const DISPLAY_SHADER: &str = "embedded://msg_shaders/shaders/lensing_display.wgsl";
 
@@ -75,7 +75,11 @@ struct LensingDisplayUniform {
     /// Passed as a uniform so the pixel grid keeps a fixed screen-space block
     /// size even when the projection shifts mid-animation.
     art_pixel_scale: f32,
+    /// Number of populated entries in `discs`.
+    disc_count: u32,
     lenses: [LensData; MAX_LENSES],
+    /// Accretion discs, drawn over the warp.
+    discs: [DiscData; MAX_DISCS],
 }
 
 impl Default for LensingDisplayUniform {
@@ -90,7 +94,9 @@ impl Default for LensingDisplayUniform {
             quantization: ColorQuantizeUniforms::default(),
             count: 0,
             art_pixel_scale: 4.0,
+            disc_count: 0,
             lenses: [LensData::default(); MAX_LENSES],
+            discs: [DiscData::default(); MAX_DISCS],
         }
     }
 }
@@ -211,7 +217,9 @@ fn prepare_lensing_display_uniforms(
         quantization: extracted.ring_quantization,
         count,
         art_pixel_scale,
+        disc_count: extracted.disc_count.min(MAX_DISCS as u32),
         lenses,
+        discs: extracted.discs,
     });
     uniforms.buffer.write_buffer(&render_device, &render_queue);
 }
@@ -250,12 +258,12 @@ fn lensing_display_pass(
     mut render_context: RenderContext,
 ) {
     let (view_target, pipeline_id) = view.into_inner();
-    // No deflection sources: the field is empty, so leave the view untouched
-    // (the scene passes straight through to the downstream post-processing
-    // stack). Sources without a visual lens (rings, lines) still warp here;
-    // they just draw no disc, because the per-lens loop is keyed on the
-    // visual `lens_count`.
-    if extracted.source_count == 0 {
+    // No deflection sources and no hole to draw over the warp: leave the view
+    // untouched (the scene passes straight through to the downstream
+    // post-processing stack). Sources without a visual lens (rings, lines)
+    // still warp here; they just draw no disc, because the per-lens loop is
+    // keyed on the visual `lens_count`.
+    if extracted.source_count == 0 && extracted.disc_count == 0 {
         return;
     }
 

@@ -44,3 +44,22 @@ fn nebula_functions_is_valid_wgsl() {
         .join("\n");
     validate("nebula_functions", &src);
 }
+
+#[test]
+fn blackhole_functions_is_valid_wgsl() {
+    // The black hole module imports the quantization library; inline it with its
+    // `cq::` prefix dropped and strip the Bevy preprocessor directives so naga
+    // can validate the pair offline.
+    let strip = |src: &str| -> String {
+        src.lines()
+            .filter(|line| !line.trim_start().starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let src = format!(
+        "{}\n{}",
+        strip(include_str!("../src/shaders/color_quantize_functions.wgsl")),
+        strip(include_str!("../src/shaders/blackhole_functions.wgsl")).replace("cq::", ""),
+    );
+    validate("blackhole_functions", &src);
+}
