@@ -78,7 +78,7 @@ struct LensingDisplayUniform {
     /// Number of populated entries in `discs`.
     disc_count: u32,
     lenses: [LensData; MAX_LENSES],
-    /// `DrawAfterLensing` black holes, drawn over the warp.
+    /// Accretion discs, drawn over the warp.
     discs: [DiscData; MAX_DISCS],
 }
 

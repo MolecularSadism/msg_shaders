@@ -61,7 +61,7 @@ pub struct ExtractedLensingField {
     pub velocity_write: Handle<Image>,
     /// Number of populated entries in the visual `lens_*` arrays.
     pub lens_count: u32,
-    /// `DrawAfterLensing` black holes the display pass draws over its warp.
+    /// Accretion discs the display pass draws over its warp.
     pub discs: [DiscData; MAX_DISCS],
     /// Number of populated entries in `discs`.
     pub disc_count: u32,
@@ -124,7 +124,7 @@ pub struct LensingFieldExtractSource {
     /// Baked nearest-palette LUT for `ring_quantization`, rebuilt only when the
     /// palette changes (see `drive_lensing`).
     pub ring_quantization_lut: Handle<Image>,
-    /// `DrawAfterLensing` black holes, filled by `drive_lensing`.
+    /// Accretion discs, filled by `drive_lensing`.
     pub discs: [DiscData; MAX_DISCS],
     pub disc_count: u32,
 }

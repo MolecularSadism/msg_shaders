@@ -191,12 +191,12 @@ impl Default for LensData {
     }
 }
 
-/// Maximum number of [`DrawAfterLensing`](crate::DrawAfterLensing) black holes
-/// the lensing display pass draws. Kept in sync with the `array<DiscData, …>`
+/// Maximum number of [`AccretionDisc`](crate::AccretionDisc)s the lensing
+/// display pass draws. Kept in sync with the `array<DiscData, …>`
 /// size in `lensing_display.wgsl`.
 pub const MAX_DISCS: usize = 4;
 
-/// One black hole the lensing display pass draws over its warp.
+/// One accretion disc the lensing display pass draws over its warp.
 #[derive(Clone, Copy, ShaderType)]
 pub struct DiscData {
     /// The same uniforms the hole's mesh material would get.

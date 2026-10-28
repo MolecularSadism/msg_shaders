@@ -84,13 +84,13 @@ pub use nebula::{
 
 pub mod prelude {
     pub use super::{
-        BlackHole, BlackHoleColors, BlackHoleGeometry, BlackHoleOverlay, BlackHolePlugin,
-        BlackHoleQuantization, ColorQuantizationPlugin, ColorQuantizeMaterial,
-        ColorQuantizeUniforms, DitherPattern, DrawAfterLensing, HoleQuantization,
-        LensingHoleCamera, LensingHolePlugin, MAX_NEBULA_LAYERS, MAX_PALETTE_COLORS,
-        MAX_RING_COLORS, MAX_STAR_LAYERS, Nebula, NebulaLayer, NebulaMaterial, NebulaPlugin,
-        PhotonRingPattern, PixelateConfig, PixelateMaterial, PixelationPlugin, QuantizationConfig,
-        QuantizePixelateMaterial, RingEdge, StarLayer, lens_capture_extent,
+        AccretionDisc, BlackHole, BlackHoleColors, BlackHoleGeometry, BlackHoleOverlay,
+        BlackHolePlugin, BlackHoleQuantization, ColorQuantizationPlugin, ColorQuantizeMaterial,
+        ColorQuantizeUniforms, DitherPattern, HoleQuantization, LensingHoleCamera,
+        LensingHolePlugin, MAX_NEBULA_LAYERS, MAX_PALETTE_COLORS, MAX_RING_COLORS, MAX_STAR_LAYERS,
+        Nebula, NebulaLayer, NebulaMaterial, NebulaPlugin, PhotonRingPattern, PixelateConfig,
+        PixelateMaterial, PixelationPlugin, QuantizationConfig, QuantizePixelateMaterial, RingEdge,
+        StarLayer, lens_capture_extent,
     };
     #[cfg(feature = "render_2d")]
     pub use super::{
@@ -112,7 +112,6 @@ impl Plugin for BlackHolePlugin {
         app.register_type::<BlackHole>();
         app.register_type::<BlackHoleColors>();
         app.register_type::<BlackHoleGeometry>();
-        app.register_type::<DrawAfterLensing>();
         app.add_systems(Update, spawn_blackhole_meshes);
         #[cfg(feature = "render_2d")]
         app.add_systems(Update, update_blackhole_time_2d);
@@ -275,18 +274,6 @@ impl Default for BlackHole {
     }
 }
 
-/// Draws a [`BlackHole`] in the lensing display pass, over the warp, instead of
-/// as a mesh in the scene.
-///
-/// A mesh is part of the scene the pass warps, so a [`LightDeflector`] on the
-/// hole would bend the hole itself. Drawn after the warp, only what lies behind
-/// it bends. Needs [`LensingHolePlugin`] and a [`LensingHoleCamera`]; the pass
-/// draws up to [`MAX_DISCS`] such holes, quantized with the lensing pass's
-/// palette.
-#[derive(Component, Debug, Clone, Copy, Default, Reflect)]
-#[reflect(Component)]
-pub struct DrawAfterLensing;
-
 /// Shared color quantization settings used by both `BlackHole` and `BlackHoleOverlay`.
 ///
 /// When present, applies retro-style palette quantization with dithering.
@@ -379,7 +366,7 @@ fn spawn_blackhole_meshes(
     quad_mesh: Option<Res<HoleQuadMesh>>,
     query: Query<
         (Entity, &BlackHole, &Transform, Option<&HoleQuantization>),
-        (Without<BlackHoleMesh>, Without<DrawAfterLensing>),
+        Without<BlackHoleMesh>,
     >,
 ) {
     if query.is_empty() {
@@ -463,25 +450,54 @@ fn blackhole_uniforms(blackhole: &BlackHole, outer_scale: f32, time: f32) -> Bla
     }
 }
 
-/// Packs a [`DrawAfterLensing`] hole for the display pass. The world mapping
-/// matches the mesh `spawn_blackhole_meshes` would build: a quad of side
-/// `size * coverage` under `transform`, sampled at `(uv - 0.5) * outer_scale`.
+/// Packs the accretion disc of `hole` for the display pass. The disc shares
+/// the overlay's normalized frame (`1.0` = `size` world units, horizon at
+/// `shadow_radius`); a negative x or y scale on `transform` mirrors it.
 #[cfg(feature = "render_2d")]
-fn disc_data(blackhole: &BlackHole, transform: &GlobalTransform, time: f32) -> DiscData {
-    let (coverage, outer_scale) = quad_scale_factors(&blackhole.geometry);
+fn disc_data(
+    hole: &BlackHoleOverlay,
+    disc: &AccretionDisc,
+    transform: &GlobalTransform,
+    time: f32,
+) -> DiscData {
+    // The shared shader samples at `(uv - 0.5) * outer_scale`; with a span of
+    // 2.0 a unit of `axis_scale` is one normalized overlay unit.
+    const OUTER_SCALE: f32 = 2.0;
     let (scale, rotation, translation) = transform.to_scale_rotation_translation();
-    // World units per centered-UV unit: the quad's side over its UV span.
-    let axis_scale = scale.truncate() * blackhole.size * coverage / outer_scale.max(1e-6);
-    let bound = 0.5 * outer_scale * axis_scale.abs().max_element() * std::f32::consts::SQRT_2;
+    let mirror = Vec2::new(scale.x.signum(), scale.y.signum());
+    let outer = hole.shadow_radius * disc.outer_ratio * QUAD_DISC_PADDING;
     DiscData {
-        params: blackhole_uniforms(blackhole, outer_scale, time),
+        params: BlackHoleUniforms {
+            spin: disc.spin,
+            inclination: disc.inclination,
+            time,
+            shadow_radius: hole.shadow_radius,
+            disk_inner_ratio: disc.inner_ratio,
+            disk_outer_ratio: disc.outer_ratio,
+            photon_ring_width: hole.photon_ring_width,
+            // The overlay draws the photon ring.
+            photon_ring_intensity: 0.0,
+            doppler_strength: disc.doppler_strength,
+            cloud_density: disc.cloud_density,
+            axial_inner_ratio: disc.axial_inner_ratio,
+            axial_outer_ratio: disc.axial_outer_ratio,
+            secondary_brightness: disc.secondary_brightness,
+            outer_scale: OUTER_SCALE,
+            pixel_grid: 0.0,
+            _pad2: 0.0,
+            disk_inner_color: Vec4::ZERO,
+            disk_mid_color: Vec4::from_array(disc.mid_color),
+            disk_outer_color: Vec4::from_array(disc.outer_color),
+            glow_color: Vec4::ZERO,
+            black_color: Vec4::from_array(hole.black_color),
+        },
         center_rotation_bound: Vec4::new(
             translation.x,
             translation.y,
             rotation.to_euler(EulerRot::ZYX).0,
-            bound,
+            outer * hole.size * std::f32::consts::SQRT_2,
         ),
-        axis_scale: axis_scale.extend(0.0).extend(0.0),
+        axis_scale: (mirror * hole.size).extend(0.0).extend(0.0),
     }
 }
 
@@ -547,6 +563,7 @@ impl Plugin for LensingHolePlugin {
         #[cfg(feature = "render_2d")]
         app.add_plugins(LensingFieldPlugin);
         app.register_type::<BlackHoleOverlay>();
+        app.register_type::<AccretionDisc>();
         app.register_type::<LensingHoleCamera>();
         // `drive_lensing` seeds the deflection-source array with the black-hole
         // `Lens` sources; `pack_deflection_sources` appends the generic shapes
@@ -610,6 +627,10 @@ pub struct BlackHoleOverlay {
     /// World-space side lengths of the square scene-capture canvas (the viewport
     /// diagonal). Computed each frame; see [`lens_capture_extent`].
     pub canvas_extent: Vec2,
+    /// Accretion disc drawn over the horizon and ring; `None` draws none. Like
+    /// the rest of the overlay it is drawn after the warp, so a
+    /// [`LightDeflector`] on the hole bends only what lies behind it.
+    pub disc: Option<AccretionDisc>,
 }
 
 impl Default for BlackHoleOverlay {
@@ -625,6 +646,63 @@ impl Default for BlackHoleOverlay {
             background: None,
             canvas_center: Vec2::ZERO,
             canvas_extent: Vec2::ONE,
+            disc: None,
+        }
+    }
+}
+
+/// Accretion disc of a [`BlackHoleOverlay`]: the [`BlackHole`] material's disc,
+/// with its painted-in lensed arcs, drawn in the overlay's frame.
+///
+/// Radii are multiples of the overlay's `shadow_radius`; the disc mirrors with
+/// a negative scale on the hole's transform. The display pass draws up to
+/// [`MAX_DISCS`] discs, quantized with the pass's palette.
+#[derive(Debug, Clone, PartialEq, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default, deny_unknown_fields))]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
+pub struct AccretionDisc {
+    /// Angular velocity in radians per second.
+    pub spin: f32,
+    /// Observer inclination in radians: 0.0 = edge-on, π/2 = face-on.
+    pub inclination: f32,
+    /// Inner edge (ISCO) as a multiple of the shadow radius.
+    pub inner_ratio: f32,
+    /// Outer edge as a multiple of the shadow radius.
+    pub outer_ratio: f32,
+    /// Brightness asymmetry between approaching and receding sides (0.0-1.0).
+    pub doppler_strength: f32,
+    /// Matter density multiplier; higher draws denser clouds.
+    pub cloud_density: f32,
+    /// Inner edge of the lensed arc over the horizon, as a multiple of the shadow radius.
+    pub axial_inner_ratio: f32,
+    /// Outer edge of the lensed arc over the horizon, as a multiple of the shadow radius.
+    pub axial_outer_ratio: f32,
+    /// Brightness multiplier for the secondary lensed images.
+    pub secondary_brightness: f32,
+    /// Mid-disc color (linear RGBA).
+    pub mid_color: [f32; 4],
+    /// Outer-disc color (linear RGBA).
+    pub outer_color: [f32; 4],
+}
+
+impl Default for AccretionDisc {
+    fn default() -> Self {
+        let geometry = BlackHoleGeometry::default();
+        let colors = BlackHoleColors::default();
+        let hole = BlackHole::default();
+        Self {
+            spin: hole.spin,
+            inclination: hole.inclination,
+            inner_ratio: geometry.disk_inner_ratio,
+            outer_ratio: geometry.disk_outer_ratio,
+            doppler_strength: geometry.doppler_strength,
+            cloud_density: geometry.cloud_density,
+            axial_inner_ratio: geometry.axial_inner_ratio,
+            axial_outer_ratio: geometry.axial_outer_ratio,
+            secondary_brightness: geometry.secondary_brightness,
+            mid_color: colors.disk_mid,
+            outer_color: colors.disk_outer,
         }
     }
 }
@@ -756,10 +834,6 @@ fn drive_lensing(
         &GlobalTransform,
         Option<&HoleQuantization>,
     )>,
-    q_discs: Query<
-        (&BlackHole, &GlobalTransform, Option<&HoleQuantization>),
-        With<DrawAfterLensing>,
-    >,
     time: Res<Time>,
     field_textures: Option<Res<lensing_field::LensingFieldTextures>>,
     field_settings: Option<Res<lensing_field::LensingFieldSettings>>,
@@ -787,6 +861,8 @@ fn drive_lensing(
     // The photon ring / shadow edge can be palette-quantized; the first lens
     // carrying a `HoleQuantization` provides the palette for the whole pass.
     let mut quantization: Option<ColorQuantizeUniforms> = None;
+    let elapsed = time.elapsed_secs_f64();
+    let mut discs: Vec<DiscData> = Vec::new();
 
     for (hole, gt, quant) in &q_holes {
         if hole.size <= 1e-3 {
@@ -806,6 +882,16 @@ fn drive_lensing(
             && let Some(q) = quant
         {
             quantization = Some(q.to_uniforms());
+        }
+
+        if let Some(disc) = &hole.disc {
+            if discs.len() < MAX_DISCS {
+                discs.push(disc_data(hole, disc, gt, looped_time(elapsed, disc.spin)));
+            } else {
+                warn_once!(
+                    "more than {MAX_DISCS} accretion discs in view; drawing the first {MAX_DISCS}"
+                );
+            }
         }
 
         // Z-rotation of the hole entity, used by the shader to rotate the pixel
@@ -845,33 +931,6 @@ fn drive_lensing(
     }
 
     let survivor_lens_data: Vec<LensData> = survivors.into_iter().map(|(_, d)| d).collect();
-
-    let elapsed = time.elapsed_secs_f64();
-    let mut discs: Vec<DiscData> = Vec::new();
-    for (blackhole, gt, quant) in &q_discs {
-        let disc = disc_data(blackhole, gt, looped_time(elapsed, blackhole.spin));
-        let center = disc.center_rotation_bound.truncate().truncate();
-        let reach = disc.center_rotation_bound.w;
-        if center.x + reach < canvas_min.x
-            || center.x - reach > canvas_max.x
-            || center.y + reach < canvas_min.y
-            || center.y - reach > canvas_max.y
-        {
-            continue;
-        }
-        if discs.len() == MAX_DISCS {
-            warn!(
-                "more than {MAX_DISCS} DrawAfterLensing black holes in view; drawing the first {MAX_DISCS}"
-            );
-            break;
-        }
-        if quantization.is_none()
-            && let Some(q) = quant
-        {
-            quantization = Some(q.to_uniforms());
-        }
-        discs.push(disc);
-    }
 
     // Feed the visual lens array, canvas geometry, and ring palette into the
     // extract source for the display pass. The deflection field itself is driven

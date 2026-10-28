@@ -12,7 +12,7 @@
 // Based on Eric Bruneton's black_hole_shader (BSD-3-Clause)
 //
 // Shared by the `BlackHoleMaterial` mesh shader (`blackhole_2d.wgsl`) and the
-// lensing display pass, which draws `DrawAfterLensing` holes over its warp.
+// lensing display pass, which draws a `BlackHoleOverlay`'s accretion disc.
 // Entry point: `shade`.
 // ============================================================================
 

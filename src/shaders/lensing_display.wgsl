@@ -15,9 +15,9 @@
 // scene capture: the source is the live, lit view target, so the lens warps the
 // final image at full screen resolution.
 //
-// Black holes marked `DrawAfterLensing` are drawn last, over the warp, by the
-// same `blackhole_functions::shade` the mesh material uses: their deflector
-// bends only what lies behind them.
+// Accretion discs are drawn last, over the warp and the horizons, by the same
+// `blackhole_functions::shade` the mesh material uses: a hole's deflector
+// bends only what lies behind it.
 // ============================================================================
 
 #import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
@@ -251,7 +251,7 @@ fn ring_color(i: u32, snapped: vec2<f32>, edge: f32, cell: f32) -> vec3<f32> {
     return u.lenses[i].ring_colors[index].rgb;
 }
 
-// The `DrawAfterLensing` holes covering `world`, composited in order,
+// The accretion discs covering `world`, composited in order,
 // premultiplied. Each is snapped to the art-pixel grid anchored on its center
 // and screen-aligned, as a mesh on the pixel canvas would be.
 fn discs_at(world: vec2<f32>, cell: f32) -> vec4<f32> {
