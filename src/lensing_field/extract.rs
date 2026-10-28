@@ -10,7 +10,7 @@ use bevy::{
 };
 
 use crate::{
-    ColorQuantizeUniforms, LensData, MAX_LENSES, MAX_RING_COLORS,
+    ColorQuantizeUniforms, DiscData, LensData, MAX_DISCS, MAX_LENSES, MAX_RING_COLORS,
     lensing_field::{
         LensingFieldSettings,
         sources::{DeflectionSource, MAX_DEFLECTION_SOURCES},
@@ -61,6 +61,10 @@ pub struct ExtractedLensingField {
     pub velocity_write: Handle<Image>,
     /// Number of populated entries in the visual `lens_*` arrays.
     pub lens_count: u32,
+    /// `DrawAfterLensing` black holes the display pass draws over its warp.
+    pub discs: [DiscData; MAX_DISCS],
+    /// Number of populated entries in `discs`.
+    pub disc_count: u32,
 }
 
 impl Default for ExtractedLensingField {
@@ -87,6 +91,8 @@ impl Default for ExtractedLensingField {
             velocity_read: Handle::default(),
             velocity_write: Handle::default(),
             lens_count: 0,
+            discs: [DiscData::default(); MAX_DISCS],
+            disc_count: 0,
         }
     }
 }
@@ -118,6 +124,9 @@ pub struct LensingFieldExtractSource {
     /// Baked nearest-palette LUT for `ring_quantization`, rebuilt only when the
     /// palette changes (see `drive_lensing`).
     pub ring_quantization_lut: Handle<Image>,
+    /// `DrawAfterLensing` black holes, filled by `drive_lensing`.
+    pub discs: [DiscData; MAX_DISCS],
+    pub disc_count: u32,
 }
 
 impl Default for LensingFieldExtractSource {
@@ -138,6 +147,8 @@ impl Default for LensingFieldExtractSource {
             canvas_center_extent: Vec4::new(0.0, 0.0, 1.0, 1.0),
             ring_quantization: ColorQuantizeUniforms::default(),
             ring_quantization_lut: Handle::default(),
+            discs: [DiscData::default(); MAX_DISCS],
+            disc_count: 0,
         }
     }
 }
@@ -198,6 +209,7 @@ fn rebuild_extracted_lensing_field(
     let Some(ref textures) = source.textures else {
         extracted.lens_count = 0;
         extracted.source_count = 0;
+        extracted.disc_count = 0;
         return;
     };
 
@@ -223,6 +235,8 @@ fn rebuild_extracted_lensing_field(
         velocity_read: textures.velocity_read().clone(),
         velocity_write: textures.velocity_write().clone(),
         lens_count: source.lens_count,
+        discs: source.discs,
+        disc_count: source.disc_count,
     };
 }
 
@@ -237,6 +251,7 @@ pub fn update_lensing_field_source(
     settings: &LensingFieldSettings,
     textures: Option<&LensingFieldTextures>,
     lenses: &[LensData],
+    discs: &[DiscData],
     canvas_center: Vec2,
     canvas_extent: Vec2,
     ring_quantization: ColorQuantizeUniforms,
@@ -253,6 +268,11 @@ pub fn update_lensing_field_source(
     );
     source.ring_quantization = ring_quantization;
     source.ring_quantization_lut = ring_quantization_lut;
+    source.disc_count = discs.len().min(MAX_DISCS) as u32;
+    source.discs = [DiscData::default(); MAX_DISCS];
+    for (slot, disc) in source.discs.iter_mut().zip(discs) {
+        *slot = *disc;
+    }
 
     let mut css = [Vec4::ZERO; MAX_LENSES];
     let mut sr = [Vec4::ZERO; MAX_LENSES];

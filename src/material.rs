@@ -3,10 +3,10 @@
 // https://github.com/ebruneton/black_hole_shader
 
 use bevy::{
-    asset::embedded_asset,
+    asset::{embedded_asset, load_internal_asset, uuid_handle},
     prelude::*,
     render::render_resource::{AsBindGroup, ShaderType},
-    shader::ShaderRef,
+    shader::{Shader, ShaderRef},
 };
 
 #[cfg(feature = "render_2d")]
@@ -14,6 +14,12 @@ use bevy::sprite_render::{AlphaMode2d, Material2d, Material2dPlugin};
 
 use crate::MAX_RING_COLORS;
 use crate::quantize_material::ColorQuantizeUniforms;
+
+/// Handle for the black hole functions shader, imported as
+/// `msg_shaders::blackhole_functions` by the mesh material and the lensing
+/// display pass.
+pub const BLACKHOLE_FUNCTIONS_SHADER_HANDLE: Handle<Shader> =
+    uuid_handle!("7c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f");
 
 #[derive(Asset, TypePath, AsBindGroup, Clone)]
 pub struct BlackHoleMaterial {
@@ -185,6 +191,34 @@ impl Default for LensData {
     }
 }
 
+/// Maximum number of [`DrawAfterLensing`](crate::DrawAfterLensing) black holes
+/// the lensing display pass draws. Kept in sync with the `array<DiscData, …>`
+/// size in `lensing_display.wgsl`.
+pub const MAX_DISCS: usize = 4;
+
+/// One black hole the lensing display pass draws over its warp.
+#[derive(Clone, Copy, ShaderType)]
+pub struct DiscData {
+    /// The same uniforms the hole's mesh material would get.
+    pub params: BlackHoleUniforms,
+    /// `xy` = world center, `z` = z-rotation (radians), `w` = world radius past
+    /// which the hole draws nothing.
+    pub center_rotation_bound: Vec4,
+    /// `xy` = world units per centered-UV unit along the hole's local axes; a
+    /// negative component mirrors that axis. `zw` unused.
+    pub axis_scale: Vec4,
+}
+
+impl Default for DiscData {
+    fn default() -> Self {
+        Self {
+            params: BlackHoleUniforms::default(),
+            center_rotation_bound: Vec4::ZERO,
+            axis_scale: Vec4::ONE,
+        }
+    }
+}
+
 /// Registers the embedded shaders and material plugins used by both
 /// `BlackHole` and `BlackHoleOverlay`. Safe to add from multiple parent plugins:
 /// `is_unique` is false and the inner `Material*Plugin` adds are guarded by
@@ -194,6 +228,14 @@ pub(crate) struct MaterialsPlugin;
 impl Plugin for MaterialsPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<crate::HoleQuantization>();
+
+        // Imported by the mesh material and the lensing display pass.
+        load_internal_asset!(
+            app,
+            BLACKHOLE_FUNCTIONS_SHADER_HANDLE,
+            "shaders/blackhole_functions.wgsl",
+            Shader::from_wgsl
+        );
 
         // The hole shaders `#import` both function modules; make sure the
         // shaders that define them are registered. Both plugins guard their

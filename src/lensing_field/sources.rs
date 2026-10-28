@@ -172,15 +172,15 @@ impl DeflectionShape {
     }
 
     /// Maps this locally-authored shape into world space through `transform`:
-    /// the center is moved by the full affine, lengths scale by the transform's
-    /// scale, and angles rotate by its Z rotation. Lets a [`LightDeflector`]
-    /// follow a moving, rotating entity for free.
+    /// the center is moved by the full affine, lengths scale by the magnitude of
+    /// the transform's x scale (a mirrored entity keeps its reach), and angles
+    /// rotate by its Z rotation. Lets a [`LightDeflector`] follow a moving,
+    /// rotating entity for free.
     pub fn transformed_by(&self, transform: &GlobalTransform) -> Self {
-        let (scale, rotation, translation) = transform.to_scale_rotation_translation();
-        let origin = translation.truncate();
+        let (scale, rotation, _) = transform.to_scale_rotation_translation();
         let z_rot = rotation.to_euler(EulerRot::ZYX).0;
-        let s = scale.x;
-        let to_world = |local: Vec2| origin + Vec2::from_angle(z_rot).rotate(local * s);
+        let s = scale.x.abs();
+        let to_world = |local: Vec2| transform.transform_point(local.extend(0.0)).truncate();
         match *self {
             DeflectionShape::Lens {
                 center,
@@ -792,6 +792,25 @@ mod tests {
         assert!((rotation - FRAC_PI_2).abs() < 1e-5);
         // No scale → length preserved.
         assert!((half_length - 4.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn transformed_by_a_mirror_keeps_the_reach() {
+        let transform = GlobalTransform::from(
+            Transform::from_translation(Vec3::new(20.0, -5.0, 0.0))
+                .with_scale(Vec3::new(-2.0, 2.0, 1.0)),
+        );
+        let local = DeflectionShape::Lens {
+            center: Vec2::new(3.0, 1.0),
+            size: 10.0,
+            inner_radius: 0.1,
+        };
+        let DeflectionShape::Lens { center, size, .. } = local.transformed_by(&transform) else {
+            panic!("expected Lens");
+        };
+
+        assert!((center - Vec2::new(14.0, -3.0)).length() < 1e-4);
+        assert!((size - 20.0).abs() < 1e-5);
     }
 
     #[test]

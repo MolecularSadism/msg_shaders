@@ -56,7 +56,10 @@ pub use lensing_field::{
         MAX_DEFLECTION_SOURCES, RING_EDGE_FADE,
     },
 };
-pub use material::{BlackHoleMaterial, BlackHoleUniforms, LensData, MAX_LENSES};
+pub use material::{
+    BLACKHOLE_FUNCTIONS_SHADER_HANDLE, BlackHoleMaterial, BlackHoleUniforms, DiscData, LensData,
+    MAX_DISCS, MAX_LENSES,
+};
 use smallvec::SmallVec;
 
 // Color quantization (reusable across materials).
@@ -83,11 +86,11 @@ pub mod prelude {
     pub use super::{
         BlackHole, BlackHoleColors, BlackHoleGeometry, BlackHoleOverlay, BlackHolePlugin,
         BlackHoleQuantization, ColorQuantizationPlugin, ColorQuantizeMaterial,
-        ColorQuantizeUniforms, DitherPattern, HoleQuantization, LensingHoleCamera,
-        LensingHolePlugin, MAX_NEBULA_LAYERS, MAX_PALETTE_COLORS, MAX_RING_COLORS, MAX_STAR_LAYERS,
-        Nebula, NebulaLayer, NebulaMaterial, NebulaPlugin, PhotonRingPattern, PixelateConfig,
-        PixelateMaterial, PixelationPlugin, QuantizationConfig, QuantizePixelateMaterial, RingEdge,
-        StarLayer, lens_capture_extent,
+        ColorQuantizeUniforms, DitherPattern, DrawAfterLensing, HoleQuantization,
+        LensingHoleCamera, LensingHolePlugin, MAX_NEBULA_LAYERS, MAX_PALETTE_COLORS,
+        MAX_RING_COLORS, MAX_STAR_LAYERS, Nebula, NebulaLayer, NebulaMaterial, NebulaPlugin,
+        PhotonRingPattern, PixelateConfig, PixelateMaterial, PixelationPlugin, QuantizationConfig,
+        QuantizePixelateMaterial, RingEdge, StarLayer, lens_capture_extent,
     };
     #[cfg(feature = "render_2d")]
     pub use super::{
@@ -109,6 +112,7 @@ impl Plugin for BlackHolePlugin {
         app.register_type::<BlackHole>();
         app.register_type::<BlackHoleColors>();
         app.register_type::<BlackHoleGeometry>();
+        app.register_type::<DrawAfterLensing>();
         app.add_systems(Update, spawn_blackhole_meshes);
         #[cfg(feature = "render_2d")]
         app.add_systems(Update, update_blackhole_time_2d);
@@ -271,6 +275,18 @@ impl Default for BlackHole {
     }
 }
 
+/// Draws a [`BlackHole`] in the lensing display pass, over the warp, instead of
+/// as a mesh in the scene.
+///
+/// A mesh is part of the scene the pass warps, so a [`LightDeflector`] on the
+/// hole would bend the hole itself. Drawn after the warp, only what lies behind
+/// it bends. Needs [`LensingHolePlugin`] and a [`LensingHoleCamera`]; the pass
+/// draws up to [`MAX_DISCS`] such holes, quantized with the lensing pass's
+/// palette.
+#[derive(Component, Debug, Clone, Copy, Default, Reflect)]
+#[reflect(Component)]
+pub struct DrawAfterLensing;
+
 /// Shared color quantization settings used by both `BlackHole` and `BlackHoleOverlay`.
 ///
 /// When present, applies retro-style palette quantization with dithering.
@@ -363,7 +379,7 @@ fn spawn_blackhole_meshes(
     quad_mesh: Option<Res<HoleQuadMesh>>,
     query: Query<
         (Entity, &BlackHole, &Transform, Option<&HoleQuantization>),
-        Without<BlackHoleMesh>,
+        (Without<BlackHoleMesh>, Without<DrawAfterLensing>),
     >,
 ) {
     if query.is_empty() {
@@ -371,31 +387,8 @@ fn spawn_blackhole_meshes(
     }
     let mesh_handle = hole_quad_mesh(&mut commands, &mut meshes, quad_mesh.as_deref());
     for (entity, blackhole, transform, quantization) in &query {
-        let geo = &blackhole.geometry;
-        let (coverage, outer_scale) = quad_scale_factors(geo);
-        let uniforms = BlackHoleUniforms {
-            spin: blackhole.spin,
-            inclination: blackhole.inclination,
-            time: 0.0,
-            shadow_radius: geo.shadow_radius,
-            disk_inner_ratio: geo.disk_inner_ratio,
-            disk_outer_ratio: geo.disk_outer_ratio,
-            photon_ring_width: geo.photon_ring_width,
-            photon_ring_intensity: geo.photon_ring_intensity,
-            doppler_strength: geo.doppler_strength,
-            cloud_density: geo.cloud_density,
-            axial_inner_ratio: geo.axial_inner_ratio,
-            axial_outer_ratio: geo.axial_outer_ratio,
-            secondary_brightness: geo.secondary_brightness,
-            outer_scale,
-            pixel_grid: blackhole.pixel_grid,
-            _pad2: 0.0,
-            disk_inner_color: Vec4::from_array(blackhole.colors.disk_inner),
-            disk_mid_color: Vec4::from_array(blackhole.colors.disk_mid),
-            disk_outer_color: Vec4::from_array(blackhole.colors.disk_outer),
-            glow_color: Vec4::from_array(blackhole.colors.glow),
-            black_color: Vec4::from_array(blackhole.colors.black),
-        };
+        let (coverage, outer_scale) = quad_scale_factors(&blackhole.geometry);
+        let uniforms = blackhole_uniforms(blackhole, outer_scale, 0.0);
 
         let quantization_uniforms = quantization.map(|q| q.to_uniforms()).unwrap_or_default();
 
@@ -439,6 +432,56 @@ fn spawn_blackhole_meshes(
                 scale: transform.scale * blackhole.size * coverage,
             },
         ));
+    }
+}
+
+/// The shader uniforms for `blackhole` at animation `time`.
+fn blackhole_uniforms(blackhole: &BlackHole, outer_scale: f32, time: f32) -> BlackHoleUniforms {
+    let geo = &blackhole.geometry;
+    BlackHoleUniforms {
+        spin: blackhole.spin,
+        inclination: blackhole.inclination,
+        time,
+        shadow_radius: geo.shadow_radius,
+        disk_inner_ratio: geo.disk_inner_ratio,
+        disk_outer_ratio: geo.disk_outer_ratio,
+        photon_ring_width: geo.photon_ring_width,
+        photon_ring_intensity: geo.photon_ring_intensity,
+        doppler_strength: geo.doppler_strength,
+        cloud_density: geo.cloud_density,
+        axial_inner_ratio: geo.axial_inner_ratio,
+        axial_outer_ratio: geo.axial_outer_ratio,
+        secondary_brightness: geo.secondary_brightness,
+        outer_scale,
+        pixel_grid: blackhole.pixel_grid,
+        _pad2: 0.0,
+        disk_inner_color: Vec4::from_array(blackhole.colors.disk_inner),
+        disk_mid_color: Vec4::from_array(blackhole.colors.disk_mid),
+        disk_outer_color: Vec4::from_array(blackhole.colors.disk_outer),
+        glow_color: Vec4::from_array(blackhole.colors.glow),
+        black_color: Vec4::from_array(blackhole.colors.black),
+    }
+}
+
+/// Packs a [`DrawAfterLensing`] hole for the display pass. The world mapping
+/// matches the mesh `spawn_blackhole_meshes` would build: a quad of side
+/// `size * coverage` under `transform`, sampled at `(uv - 0.5) * outer_scale`.
+#[cfg(feature = "render_2d")]
+fn disc_data(blackhole: &BlackHole, transform: &GlobalTransform, time: f32) -> DiscData {
+    let (coverage, outer_scale) = quad_scale_factors(&blackhole.geometry);
+    let (scale, rotation, translation) = transform.to_scale_rotation_translation();
+    // World units per centered-UV unit: the quad's side over its UV span.
+    let axis_scale = scale.truncate() * blackhole.size * coverage / outer_scale.max(1e-6);
+    let bound = 0.5 * outer_scale * axis_scale.abs().max_element() * std::f32::consts::SQRT_2;
+    DiscData {
+        params: blackhole_uniforms(blackhole, outer_scale, time),
+        center_rotation_bound: Vec4::new(
+            translation.x,
+            translation.y,
+            rotation.to_euler(EulerRot::ZYX).0,
+            bound,
+        ),
+        axis_scale: axis_scale.extend(0.0).extend(0.0),
     }
 }
 
@@ -713,6 +756,11 @@ fn drive_lensing(
         &GlobalTransform,
         Option<&HoleQuantization>,
     )>,
+    q_discs: Query<
+        (&BlackHole, &GlobalTransform, Option<&HoleQuantization>),
+        With<DrawAfterLensing>,
+    >,
+    time: Res<Time>,
     field_textures: Option<Res<lensing_field::LensingFieldTextures>>,
     field_settings: Option<Res<lensing_field::LensingFieldSettings>>,
     mut field_source: Option<ResMut<lensing_field::extract::LensingFieldExtractSource>>,
@@ -798,6 +846,33 @@ fn drive_lensing(
 
     let survivor_lens_data: Vec<LensData> = survivors.into_iter().map(|(_, d)| d).collect();
 
+    let elapsed = time.elapsed_secs_f64();
+    let mut discs: Vec<DiscData> = Vec::new();
+    for (blackhole, gt, quant) in &q_discs {
+        let disc = disc_data(blackhole, gt, looped_time(elapsed, blackhole.spin));
+        let center = disc.center_rotation_bound.truncate().truncate();
+        let reach = disc.center_rotation_bound.w;
+        if center.x + reach < canvas_min.x
+            || center.x - reach > canvas_max.x
+            || center.y + reach < canvas_min.y
+            || center.y - reach > canvas_max.y
+        {
+            continue;
+        }
+        if discs.len() == MAX_DISCS {
+            warn!(
+                "more than {MAX_DISCS} DrawAfterLensing black holes in view; drawing the first {MAX_DISCS}"
+            );
+            break;
+        }
+        if quantization.is_none()
+            && let Some(q) = quant
+        {
+            quantization = Some(q.to_uniforms());
+        }
+        discs.push(disc);
+    }
+
     // Feed the visual lens array, canvas geometry, and ring palette into the
     // extract source for the display pass. The deflection field itself is driven
     // separately from `LightDeflector` sources by `pack_deflection_sources`.
@@ -829,6 +904,7 @@ fn drive_lensing(
                 .unwrap_or(&lensing_field::LensingFieldSettings::default()),
             field_textures.as_deref(),
             &survivor_lens_data,
+            &discs,
             canvas_center,
             canvas_extent,
             quant,

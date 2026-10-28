@@ -14,11 +14,16 @@
 // Unlike the canvas-strategy material, nothing is sampled from an offscreen
 // scene capture: the source is the live, lit view target, so the lens warps the
 // final image at full screen resolution.
+//
+// Black holes marked `DrawAfterLensing` are drawn last, over the warp, by the
+// same `blackhole_functions::shade` the mesh material uses: their deflector
+// bends only what lies behind them.
 // ============================================================================
 
 #import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
 #import msg_shaders::color_quantize_functions as cq
 #import msg_shaders::pixelate_functions as px
+#import msg_shaders::blackhole_functions as bh
 
 // One lens, packed into four vec4 rows. Must match `LensData` in material.rs.
 struct LensData {
@@ -39,6 +44,19 @@ struct LensData {
 };
 
 const MAX_LENSES: u32 = 64u;
+
+// One black hole drawn over the warp. Must match `DiscData` in material.rs.
+struct DiscData {
+    params: bh::BlackHoleMaterial,
+    // xy = world center, z = z-rotation (radians), w = world radius past which
+    // the hole draws nothing.
+    center_rotation_bound: vec4<f32>,
+    // xy = world units per centered-UV unit along the hole's local axes; a
+    // negative component mirrors that axis.
+    axis_scale: vec4<f32>,
+};
+
+const MAX_DISCS: u32 = 4u;
 
 // Must match `ColorQuantizeUniforms` field order in quantize_material.rs.
 struct QuantizationSettings {
@@ -68,7 +86,9 @@ struct LensingDisplay {
     // Physical pixels per art pixel, from the camera projection. Keeps the
     // pixel grid at a fixed screen-space block size across projection changes.
     art_pixel_scale: f32,
+    disc_count: u32,
     lenses: array<LensData, 64>,
+    discs: array<DiscData, 4>,
 };
 
 @group(0) @binding(0) var scene_tex: texture_2d<f32>;
@@ -231,6 +251,35 @@ fn ring_color(i: u32, snapped: vec2<f32>, edge: f32, cell: f32) -> vec3<f32> {
     return u.lenses[i].ring_colors[index].rgb;
 }
 
+// The `DrawAfterLensing` holes covering `world`, composited in order,
+// premultiplied. Each is snapped to the art-pixel grid anchored on its center
+// and screen-aligned, as a mesh on the pixel canvas would be.
+fn discs_at(world: vec2<f32>, cell: f32) -> vec4<f32> {
+    var out = vec4<f32>(0.0);
+    let quantize = bh::QuantizeParams(
+        u.quantization.palette_size,
+        u.quantization.alpha_cutoff,
+        u.quantization.dither_pattern,
+        u.quantization.transparency_floor,
+    );
+    let count = min(u.disc_count, MAX_DISCS);
+    for (var i = 0u; i < count; i = i + 1u) {
+        let disc = u.discs[i];
+        let centered = world - disc.center_rotation_bound.xy;
+        if length(centered) > disc.center_rotation_bound.w {
+            continue;
+        }
+        let snapped = px::pixelate_world(centered, cell);
+        let local = px::rotate2d(snapped, -disc.center_rotation_bound.z) / disc.axis_scale.xy;
+        // The material's quad UV: V points down, `centered = (uv - 0.5) * outer_scale`.
+        let src_uv = vec2<f32>(local.x, -local.y) / disc.params.outer_scale + vec2<f32>(0.5);
+        let dither_pos = px::pixel_cell_index(centered, cell);
+        let color = bh::shade(src_uv, dither_pos, disc.params, quantize, palette_lut);
+        out = vec4<f32>(color.rgb * color.a + out.rgb * (1.0 - color.a), color.a + out.a * (1.0 - color.a));
+    }
+    return out;
+}
+
 @fragment
 fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let world = world_from_uv(in.uv);
@@ -241,6 +290,17 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     // so the hole keeps smooth sub-pixel movement while its edge reads as blocks.
     let cell = u.art_pixel_scale * px::world_units_per_pixel(world);
 
+    // An opaque hole drawn over the warp hides it: no scene read at all.
+    let front = discs_at(world, cell);
+    if front.a >= 1.0 {
+        return vec4<f32>(front.rgb, 1.0);
+    }
+    let behind = warped(world, cell);
+    return vec4<f32>(front.rgb + behind.rgb * (1.0 - front.a), 1.0);
+}
+
+// The lensed scene with every lens's photon ring and event horizon on top.
+fn warped(world: vec2<f32>, cell: f32) -> vec4<f32> {
     var ring_accum = vec3<f32>(0.0);
     var ring_strength = 0.0;
     // Patterned ring drawn over the scene (dither, cutoff, gradient edges): the
