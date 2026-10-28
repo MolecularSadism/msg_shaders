@@ -46,7 +46,7 @@ struct BlackHoleMaterial {
     secondary_brightness: f32,          // Brightness multiplier for secondary rings
     outer_scale: f32,                   // Centered-UV span. Replaces the historical `* 2.0`.
     pixel_grid: f32,                    // Pixelation cells across the quad (0 = off).
-    _pad2: f32,
+    padding: f32,
 
     // Row 5-9: Emission colors by disk zone
     disk_inner_color: vec4<f32>,  // White-hot plasma near ISCO
@@ -88,7 +88,7 @@ fn hash(n: f32) -> f32 {
 
 /// 2D hash for spatially-varying noise patterns.
 /// Creates unique values based on 2D position for disk turbulence.
-fn hash2(p: vec2<f32>) -> f32 {
+fn hash_vec2(p: vec2<f32>) -> f32 {
     return fract(sin(dot(p, vec2<f32>(127.1, 311.7))) * 43758.5453123);
 }
 
@@ -101,8 +101,8 @@ fn noise2d(p: vec2<f32>) -> f32 {
     let u = f * f * (3.0 - 2.0 * f);
 
     return mix(
-        mix(hash2(i + vec2<f32>(0.0, 0.0)), hash2(i + vec2<f32>(1.0, 0.0)), u.x),
-        mix(hash2(i + vec2<f32>(0.0, 1.0)), hash2(i + vec2<f32>(1.0, 1.0)), u.x),
+        mix(hash_vec2(i + vec2<f32>(0.0, 0.0)), hash_vec2(i + vec2<f32>(1.0, 0.0)), u.x),
+        mix(hash_vec2(i + vec2<f32>(0.0, 1.0)), hash_vec2(i + vec2<f32>(1.0, 1.0)), u.x),
         u.y
     );
 }
@@ -128,14 +128,14 @@ struct CloudLayerParams {
 /// Generates a single cloud layer's contribution to disk brightness.
 /// Models discrete matter clumps orbiting in Keplerian motion.
 ///
-/// `band12` is `floor(norm_r * 12.0)`, a coarse radial band index that is
+/// `coarse_band` is `floor(norm_r * 12.0)`, a coarse radial band index that is
 /// independent of layer params and therefore hoisted to the caller so the
 /// seven layers share one `floor` instead of computing seven.
 fn cloud_layer(
     phi: f32,           // Azimuthal angle in disk plane
     norm_r: f32,        // Normalized radius [0,1] within disk
     rotating_phi: f32,  // Time-animated angular position
-    band12: f32,        // Shared coarse band index `floor(norm_r * 12.0)`
+    coarse_band: f32,        // Shared coarse band index `floor(norm_r * 12.0)`
     params: CloudLayerParams
 ) -> f32 {
     // Per-band angular chaos creates realistic turbulent structure
@@ -143,7 +143,7 @@ fn cloud_layer(
     let chaotic_phi = rotating_phi + radial_chaos + params.phase_offset;
 
     // Integer count: clouds tile the ring seamlessly and the layer repeats each revolution.
-    let ang_count = max(round(params.angular_count + hash(band12 * params.chaos_seed) * 20.0), 1.0);
+    let ang_count = max(round(params.angular_count + hash(coarse_band * params.chaos_seed) * 20.0), 1.0);
 
     // Convert to grid coordinates for discrete cloud placement
     let ang_phase = chaotic_phi * ang_count / TAU;
@@ -195,42 +195,42 @@ fn accretion_disk_clouds(phi: f32, r: f32, disk_inner: f32, disk_outer: f32) -> 
     let edge_fade = smoothstep(0.0, 0.12, norm_r) * smoothstep(1.0, 0.88, norm_r);
 
     // Coarse radial band index shared by every layer's ang_count hash.
-    let band12 = floor(norm_r * 12.0);
+    let coarse_band = floor(norm_r * 12.0);
 
     var brightness = 0.0;
 
     // Layer 1: Primary large-scale structure (spiral arms)
-    brightness = max(brightness, cloud_layer(phi, norm_r, rotating_phi, band12, CloudLayerParams(
+    brightness = max(brightness, cloud_layer(phi, norm_r, rotating_phi, coarse_band, CloudLayerParams(
         40.0, 44.0, 0.0, 0.0, 0.22, 6.45, 6.0, 1.0, 20.0
     )));
 
     // Layer 2: Secondary turbulent eddies
-    brightness = max(brightness, cloud_layer(phi, norm_r, rotating_phi, band12, CloudLayerParams(
+    brightness = max(brightness, cloud_layer(phi, norm_r, rotating_phi, coarse_band, CloudLayerParams(
         55.0, 60.0, 0.5, 0.33, 0.25, 7.85, 8.0, 0.8, 15.0
     )));
 
     // Layer 3: Fine-scale turbulence
-    brightness = max(brightness, cloud_layer(phi, norm_r, rotating_phi, band12, CloudLayerParams(
+    brightness = max(brightness, cloud_layer(phi, norm_r, rotating_phi, coarse_band, CloudLayerParams(
         80.0, 90.0, 0.0, 0.67, 0.27, 10.0, 10.0, 0.6, 25.0
     )));
 
     // Layer 4: Wispy filaments
-    brightness = max(brightness, cloud_layer(phi, norm_r, rotating_phi, band12, CloudLayerParams(
+    brightness = max(brightness, cloud_layer(phi, norm_r, rotating_phi, coarse_band, CloudLayerParams(
         120.0, 120.0, 0.25, 0.0, 0.30, 12.5, 12.5, 0.4, 30.0
     )));
 
     // Layer 5: Additional density variations
-    brightness = max(brightness, cloud_layer(phi, norm_r, rotating_phi, band12, CloudLayerParams(
+    brightness = max(brightness, cloud_layer(phi, norm_r, rotating_phi, coarse_band, CloudLayerParams(
         65.0, 52.0, 0.75, 0.17, 0.24, 8.5, 7.0, 0.9, 17.0
     )));
 
     // Layer 6: Intermediate structure
-    brightness = max(brightness, cloud_layer(phi, norm_r, rotating_phi, band12, CloudLayerParams(
+    brightness = max(brightness, cloud_layer(phi, norm_r, rotating_phi, coarse_band, CloudLayerParams(
         95.0, 75.0, 0.125, 0.5, 0.28, 9.5, 9.0, 0.7, 21.0
     )));
 
     // Layer 7: Largest-scale density waves
-    brightness = max(brightness, cloud_layer(phi, norm_r, rotating_phi, band12, CloudLayerParams(
+    brightness = max(brightness, cloud_layer(phi, norm_r, rotating_phi, coarse_band, CloudLayerParams(
         48.0, 38.0, 0.375, 0.83, 0.26, 5.5, 5.5, 0.85, 23.0
     )));
 
