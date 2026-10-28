@@ -11,7 +11,8 @@
 //! - [`LensingHolePlugin`] — screen-space gravitational lensing. A GPU-computed deflection field
 //!   warps the camera's rendered view each frame. Mark your 2D camera with [`LensingHoleCamera`]
 //!   and attach [`LightDeflector`] sources (lens, ring, or line shapes) to entities; an optional
-//!   [`BlackHoleOverlay`] draws a photon ring and event horizon on top of the warp.
+//!   [`BlackHoleOverlay`] draws a photon ring, event horizon and optional [`AccretionDisc`] on top
+//!   of the warp, so a hole's deflector bends only what lies behind it.
 //! - [`ColorQuantizationPlugin`] — nearest-palette color quantization in Oklab space with optional
 //!   Bayer dithering, as a reusable material and a WGSL function library for other shaders.
 //! - [`PixelationPlugin`] — world-anchored pixelation, likewise a material plus a WGSL function
@@ -25,8 +26,8 @@
 //! - `render_2d` (default) — `Mesh2d` materials and the screen-space lensing pipeline.
 //! - `render_3d` — `Mesh3d` variant of the black-hole material.
 //! - `serde` — `Serialize`/`Deserialize` on the plain-data settings enums and the [`BlackHole`],
-//!   [`BlackHoleColors`], [`BlackHoleGeometry`], and [`HoleQuantization`] config types, so a game
-//!   can author them straight from its own config files. The config structs use struct-level
+//!   [`BlackHoleColors`], [`BlackHoleGeometry`], [`AccretionDisc`], and [`HoleQuantization`] config
+//!   types, so a game can author them straight from its own config files. The config structs use struct-level
 //!   `#[serde(default, deny_unknown_fields)]`: a partial file sets only the fields it names (the
 //!   rest fall back to the `Default` impls), while a misspelled field name is a parse error rather
 //!   than being silently ignored.

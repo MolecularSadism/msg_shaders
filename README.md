@@ -13,7 +13,7 @@ track the game's needs.
 | Effect | Plugin | What it does |
 |--------|--------|--------------|
 | Black hole | `BlackHolePlugin` | Schwarzschild black-hole material on a quad: accretion disc, photon ring, Doppler beaming, relativistic lensing. Based on [Eric Bruneton's black_hole_shader](https://github.com/ebruneton/black_hole_shader). |
-| Gravitational lensing | `LensingHolePlugin` | Screen-space warp of the camera's view, driven by a GPU-simulated deflection field. Generic `LightDeflector` sources (lens / ring / line); optional `BlackHoleOverlay` photon-ring + event-horizon discs, with an optional multi-color streaked `PhotonRingPattern` ring. |
+| Gravitational lensing | `LensingHolePlugin` | Screen-space warp of the camera's view, driven by a GPU-simulated deflection field. Generic `LightDeflector` sources (lens / ring / line); optional `BlackHoleOverlay` photon-ring + event-horizon discs, with an optional multi-color streaked `PhotonRingPattern` ring and an optional `AccretionDisc`. The overlay is drawn after the warp, so a hole's deflector bends only what lies behind it. |
 | Color quantization | `ColorQuantizationPlugin` | Nearest-palette quantization in Oklab space with Bayer dithering — a material plus a WGSL function library other shaders can `#import`. |
 | Pixelation | `PixelationPlugin` | World-anchored pixelation — material plus WGSL function library. |
 | Nebula + starfield | `NebulaPlugin` | A stack of procedural nebula cloud layers (each its own noise, three-stop color ramp, and parallax) composited over a base color, plus a stack of twinkling star layers. Snapped to the art-pixel grid and reduced to a palette with dithering; stars pulse (winking fully dark) and shift color over time. Reuses the quantization and pixelation modules. |
@@ -63,6 +63,11 @@ fn setup(mut commands: Commands) {
 
 Tune the field via the `LensingFieldSettings` resource (force scale, falloff,
 off-screen edge handling).
+
+To draw the hole itself, add a `BlackHoleOverlay` to the same entity. Its
+`disc: Some(AccretionDisc { .. })` adds the `BlackHole` material's accretion disc,
+drawn by the lensing pass over the warp: the scene behind the hole bends, the
+hole and its disc do not. Up to `MAX_DISCS` discs are drawn per frame.
 
 Layered nebula + twinkling starfield background on a quad:
 
@@ -115,7 +120,7 @@ cargo run --example lensing
 - `render_2d` (default) — `Mesh2d` materials and the screen-space lensing pipeline
 - `render_3d` — `Mesh3d` variant of the black-hole material; enables Bevy's `bevy_pbr`
 - `serde` — `Serialize`/`Deserialize` on the plain-data settings enums and the `BlackHole`,
-  `BlackHoleColors`, `BlackHoleGeometry`, and `HoleQuantization` config types, so a game can
+  `BlackHoleColors`, `BlackHoleGeometry`, `AccretionDisc`, and `HoleQuantization` config types, so a game can
   author them straight from its own config files. The config structs use struct-level
   `#[serde(default, deny_unknown_fields)]`: a partial file sets only the fields it names (the
   rest fall back to the `Default` impls), while a misspelled field name is a parse error
@@ -125,7 +130,7 @@ cargo run --example lensing
 
 | msg_shaders | Bevy | Rust |
 |-------------|------|------|
-| 0.6 | 0.19 | 1.95+ (edition 2024) |
+| 0.6-0.7 | 0.19 | 1.95+ (edition 2024) |
 | 0.2-0.5 | 0.18 | 1.85+ (edition 2024) |
 
 ## Installation
@@ -134,7 +139,7 @@ Not yet on crates.io — depend on the repository:
 
 ```toml
 [dependencies]
-msg_shaders = { git = "https://github.com/MolecularSadism/msg_shaders", tag = "v0.6.1" }
+msg_shaders = { git = "https://github.com/MolecularSadism/msg_shaders", tag = "v0.7.0" }
 ```
 
 The one studio dependency is
