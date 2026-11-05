@@ -150,7 +150,7 @@ fn setup(mut commands: Commands) {
 ```
 
 Gate the `PlanetSpinSystems` set to freeze the surface spin (e.g. while paused).
-`PixelPlanetShaderLibrary` registers only the shared
+`PixelPlanetShaderLibraryPlugin` registers only the shared
 `msg_shaders::pixel_planet_functions` WGSL module (noise, dithering) for other
 shaders that import it.
 

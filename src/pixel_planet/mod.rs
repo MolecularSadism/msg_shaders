@@ -89,9 +89,9 @@ pub(crate) const RING_SHADER: Handle<Shader> = uuid_handle!("07b6c8da-9124-4037-
 /// Registers the shared shader library `msg_shaders::pixel_planet_functions` alone (noise,
 /// dithering), for shaders outside this module that import it. [`PixelPlanetPlugin`] adds it
 /// when missing.
-pub struct PixelPlanetShaderLibrary;
+pub struct PixelPlanetShaderLibraryPlugin;
 
-impl Plugin for PixelPlanetShaderLibrary {
+impl Plugin for PixelPlanetShaderLibraryPlugin {
     fn build(&self, app: &mut App) {
         load_internal_asset!(
             app,
@@ -107,8 +107,8 @@ pub struct PixelPlanetPlugin;
 
 impl Plugin for PixelPlanetPlugin {
     fn build(&self, app: &mut App) {
-        if !app.is_plugin_added::<PixelPlanetShaderLibrary>() {
-            app.add_plugins(PixelPlanetShaderLibrary);
+        if !app.is_plugin_added::<PixelPlanetShaderLibraryPlugin>() {
+            app.add_plugins(PixelPlanetShaderLibraryPlugin);
         }
         load_internal_asset!(
             app,

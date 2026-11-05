@@ -94,8 +94,8 @@ pub use nebula::{
 #[cfg(feature = "render_2d")]
 pub use pixel_planet::{
     PIXEL_PLANET_FUNCTIONS_SHADER_HANDLE, PIXEL_PLANET_FUNCTIONS_WGSL, PixelPlanet,
-    PixelPlanetPlugin, PixelPlanetShaderLibrary, PlanetPalette, PlanetSpec, PlanetSpinSystems,
-    PlanetType,
+    PixelPlanetPlugin, PixelPlanetShaderLibraryPlugin, PlanetPalette, PlanetSpec,
+    PlanetSpinSystems, PlanetType,
 };
 
 pub mod prelude {
