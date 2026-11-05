@@ -63,3 +63,63 @@ fn blackhole_functions_is_valid_wgsl() {
     );
     validate("blackhole_functions", &src);
 }
+
+/// Minimal stand-in for `bevy_sprite::mesh2d_vertex_output::VertexOutput`,
+/// providing the `uv` field the planet fragments read.
+const PLANET_VERTEX_OUTPUT_STUB: &str = "\
+struct VertexOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) world_position: vec4<f32>,
+    @location(1) uv: vec2<f32>,
+};
+";
+
+/// A planet layer shader with the shared library inlined and the naga-oil
+/// `#import` / `#define_import_path` directives stripped, as plain WGSL.
+fn compose_planet_layer(shader: &str) -> String {
+    let common = include_str!("../src/shaders/pixel_planet_functions.wgsl");
+    let mut out = String::from(PLANET_VERTEX_OUTPUT_STUB);
+    for source in [common, shader] {
+        for line in source.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("#import") || trimmed.starts_with("#define_import_path") {
+                continue;
+            }
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+#[test]
+fn pixel_planet_shaders_are_valid_wgsl() {
+    for (label, shader) in [
+        (
+            "pixel_planet_no_atmosphere",
+            include_str!("../src/shaders/pixel_planet_no_atmosphere.wgsl"),
+        ),
+        (
+            "pixel_planet_under",
+            include_str!("../src/shaders/pixel_planet_under.wgsl"),
+        ),
+        (
+            "pixel_planet_landmass",
+            include_str!("../src/shaders/pixel_planet_landmass.wgsl"),
+        ),
+        (
+            "pixel_planet_clouds",
+            include_str!("../src/shaders/pixel_planet_clouds.wgsl"),
+        ),
+        (
+            "pixel_planet_gas_layers",
+            include_str!("../src/shaders/pixel_planet_gas_layers.wgsl"),
+        ),
+        (
+            "pixel_planet_ring",
+            include_str!("../src/shaders/pixel_planet_ring.wgsl"),
+        ),
+    ] {
+        validate(label, &compose_planet_layer(shader));
+    }
+}
