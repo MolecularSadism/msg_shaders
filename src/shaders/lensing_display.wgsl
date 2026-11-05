@@ -339,9 +339,7 @@ fn warped(world: vec2<f32>, frag_px: vec2<f32>, cell: f32) -> vec4<f32> {
     var over_alpha = 0.0;
     var horizon = false;
     var horizon_color = vec3<f32>(0.0);
-    // The art-pixel cell of the lens owning this fragment: its center, where the
-    // ring band reads the scene, and its index, the dither phase.
-    var active_cell = world;
+    // The art-pixel cell index of the lens owning this fragment: the dither phase.
     var active_index = vec2<f32>(0.0);
     var active_weight = -1.0;
 
@@ -417,7 +415,6 @@ fn warped(world: vec2<f32>, frag_px: vec2<f32>, cell: f32) -> vec4<f32> {
         let weight = select(ring_i, 1e9, in_horizon);
         if weight > active_weight {
             active_weight = weight;
-            active_cell = screen.world;
             active_index = screen.index;
         }
     }
@@ -442,12 +439,10 @@ fn warped(world: vec2<f32>, frag_px: vec2<f32>, cell: f32) -> vec4<f32> {
     // quantized blocks stay locked to the hole as it moves.
     let dither_pos = active_index;
 
-    // The lit scene plus any ring glow. Inside the ring band the scene is read
-    // once per art-pixel cell, at its center, so every ring pixel is one uniform
-    // block; fragments outside the band read it per fragment and stop here, so
-    // the palette match below runs only on the ring.
+    // The lit scene plus any ring glow. Fragments outside the ring band stop
+    // here, so the palette match below runs only on the ring.
     let ring_mask = max(clamp(ring_strength, 0.0, 1.0), over_alpha);
-    let lit = lensed_scene(select(world, active_cell, ring_mask > 0.0)) + ring_accum;
+    let lit = lensed_scene(world) + ring_accum;
     let scene = vec4<f32>(mix(lit, over_color, over_alpha), 1.0);
     if ring_mask <= 0.0 {
         return scene;
