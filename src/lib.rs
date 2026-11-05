@@ -1,5 +1,5 @@
 //! Shader effects for Bevy: black holes, gravitational lensing, palette
-//! quantization, and pixelation.
+//! quantization, pixelation, nebulae, and pixel-art planets.
 //!
 //! # Plugins
 //!
@@ -20,10 +20,14 @@
 //! - [`NebulaPlugin`] — a procedural nebula + twinkling starfield background. Attach a [`Nebula`]
 //!   component to a quad; the clouds and stars are snapped to the art-pixel grid and reduced to a
 //!   palette with dithering, reusing the quantization and pixelation modules above.
+//! - [`PixelPlanetPlugin`] — pixel-art planets (barren, terran, gas giant; optional clouds and
+//!   ring) with a caller-injected [`PlanetPalette`]. Spawn a [`PixelPlanet`]; its shader layers
+//!   are added as `Mesh2d` children. Ported from Deep-Fold's PixelPlanets.
 //!
 //! # Feature flags
 //!
-//! - `render_2d` (default) — `Mesh2d` materials and the screen-space lensing pipeline.
+//! - `render_2d` (default) — `Mesh2d` materials, the screen-space lensing pipeline, and the
+//!   pixel planets.
 //! - `render_3d` — `Mesh3d` variant of the black-hole material.
 //! - `serde` — `Serialize`/`Deserialize` on the plain-data settings enums and the [`BlackHole`],
 //!   [`BlackHoleColors`], [`BlackHoleGeometry`], [`AccretionDisc`], and [`HoleQuantization`] config
@@ -36,12 +40,15 @@
 //!
 //! MIT OR Apache-2.0. The black-hole shader derives from Eric Bruneton's
 //! [black_hole_shader](https://github.com/ebruneton/black_hole_shader)
-//! (BSD-3-Clause, see `LICENSE-THIRD-PARTY`).
+//! (BSD-3-Clause, see `LICENSE-THIRD-PARTY`). The pixel planets derive from Deep-Fold's
+//! [PixelPlanets](https://github.com/Deep-Fold/PixelPlanets) (MIT, see `LICENSE-THIRD-PARTY`).
 
 #[cfg(feature = "render_2d")]
 mod lensing_field;
 mod material;
 mod nebula;
+#[cfg(feature = "render_2d")]
+mod pixel_planet;
 mod pixelate;
 mod quantize;
 mod quantize_material;
@@ -83,6 +90,14 @@ pub use nebula::{
     StarLayerUniform,
 };
 
+// Pixel-art planets.
+#[cfg(feature = "render_2d")]
+pub use pixel_planet::{
+    PIXEL_PLANET_FUNCTIONS_SHADER_HANDLE, PIXEL_PLANET_FUNCTIONS_WGSL, PixelPlanet,
+    PixelPlanetPlugin, PixelPlanetShaderLibraryPlugin, PlanetPalette, PlanetSpec,
+    PlanetSpinSystems, PlanetType,
+};
+
 pub mod prelude {
     pub use super::{
         AccretionDisc, BlackHole, BlackHoleColors, BlackHoleGeometry, BlackHoleOverlay,
@@ -97,6 +112,7 @@ pub mod prelude {
     pub use super::{
         DeflectionShape, DeflectionSource, LENSING_FIELD_RES, LensingFieldPlugin,
         LensingFieldSettings, LightDeflectionRequest, LightDeflector, MAX_DEFLECTION_SOURCES,
+        PixelPlanet, PixelPlanetPlugin, PlanetPalette, PlanetSpec, PlanetSpinSystems, PlanetType,
         RING_EDGE_FADE,
     };
 }
@@ -895,8 +911,8 @@ fn drive_lensing(
             }
         }
 
-        // Z-rotation of the hole entity, used by the shader to rotate the pixel
-        // grid into the hole's own frame so the pixelation spins with it.
+        // Z-rotation of the hole entity, used by the shader to turn the photon
+        // ring pattern with the hole; the pixel grid stays screen-aligned.
         let rotation = gt.rotation().to_euler(EulerRot::ZYX).0;
         let (ring_colors, ring_pattern, ring_edge) = hole.photon_ring_pattern.as_ref().map_or(
             ([Vec4::ZERO; MAX_RING_COLORS], Vec4::ZERO, Vec4::ZERO),
