@@ -911,8 +911,8 @@ fn drive_lensing(
             }
         }
 
-        // Z-rotation of the hole entity, used by the shader to rotate the pixel
-        // grid into the hole's own frame so the pixelation spins with it.
+        // Z-rotation of the hole entity, used by the shader to turn the photon
+        // ring pattern with the hole; the pixel grid stays screen-aligned.
         let rotation = gt.rotation().to_euler(EulerRot::ZYX).0;
         let (ring_colors, ring_pattern, ring_edge) = hole.photon_ring_pattern.as_ref().map_or(
             ([Vec4::ZERO; MAX_RING_COLORS], Vec4::ZERO, Vec4::ZERO),

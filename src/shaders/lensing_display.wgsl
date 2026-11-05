@@ -226,11 +226,13 @@ fn hash3_01(a: i32, b: i32, c: u32) -> f32 {
 }
 
 // Photon-ring color of one art-pixel cell of lens `i`. `snapped` is the cell's
-// center in the hole's rotated frame and `edge` the shadow radius, both in world
-// units. Cells are grouped into rows by distance from the shadow edge and into
-// streaks of `ring_pattern.y` cells along each row; a streak shares one color,
-// and a `ring_pattern.z` fraction of cells picks its own.
-fn ring_color(i: u32, snapped: vec2<f32>, edge: f32, cell: f32) -> vec3<f32> {
+// center relative to the hole on the screen-aligned art-pixel grid, `angle` the
+// hole's z-rotation and `edge` the shadow radius, in world units. Cells are
+// grouped into rows by distance from the shadow edge and into streaks of
+// `ring_pattern.y` cells along each row, measured from the hole's rotated axis so
+// the pattern turns with the hole; a streak shares one color, and a
+// `ring_pattern.z` fraction of cells picks its own.
+fn ring_color(i: u32, snapped: vec2<f32>, angle: f32, edge: f32, cell: f32) -> vec3<f32> {
     let pattern = u.lenses[i].ring_pattern;
     let count = u32(pattern.x);
     if count == 0u {
@@ -240,7 +242,7 @@ fn ring_color(i: u32, snapped: vec2<f32>, edge: f32, cell: f32) -> vec3<f32> {
     let unit = max(cell, 1e-6);
     let dist = length(snapped);
     let row = i32(floor((dist - edge) / unit));
-    let arc = atan2(snapped.y, snapped.x) * dist / unit;
+    let arc = (atan2(snapped.y, snapped.x) - angle) * dist / unit;
     let streak = i32(floor(arc / pattern.y));
     var pick = hash3_01(row, streak, seed);
     let cell_index = vec2<i32>(floor(snapped / unit));
@@ -310,10 +312,10 @@ fn warped(world: vec2<f32>, cell: f32) -> vec4<f32> {
     var horizon = false;
     var horizon_color = vec3<f32>(0.0);
     // Center of the lens owning this fragment, so the dither cell is measured from
-    // the hole's center — the quantized blocks ride with the moving hole. The
-    // dither is deliberately NOT rotated: rotation belongs to the ring/shadow
-    // geometry only, so the lensed background quantized here never spins.
+    // the hole's center — the quantized blocks ride with the moving hole.
     var active_center = vec2<f32>(0.0);
+    // That lens's art-pixel cell center, where the ring band reads the scene.
+    var active_cell = world;
     var active_weight = -1.0;
 
     let count = min(u.count, MAX_LENSES);
@@ -330,13 +332,13 @@ fn warped(world: vec2<f32>, cell: f32) -> vec4<f32> {
             continue;
         }
 
-        // Snap the centered offset to the art-pixel grid in the hole's own
-        // rotated frame. Rotating by -angle aligns the block grid to (and spins
-        // it with) the hole's rotation; the grid rides with the hole and stays
-        // smooth under motion. A whole art-pixel cell shares one snapped offset,
-        // so the horizon disc and ring band step in pixel blocks, not smooth
-        // circles.
-        let snapped = px::pixelate_world(px::rotate2d(centered, -angle), cell);
+        // Snap the centered offset to the screen-aligned art-pixel grid anchored
+        // on the hole's center — the grid the accretion disc uses — so the
+        // horizon, ring and disc share one set of pixel blocks. The hole's
+        // rotation only turns the ring pattern (`ring_color`), never the grid. A
+        // whole art-pixel cell shares one snapped offset, so the horizon disc and
+        // ring band step in pixel blocks, not smooth circles.
+        let snapped = px::pixelate_world(centered, cell);
         let r = length(snapped) / size; // ring band, measured from the cell center
 
         // EVENT HORIZON: solid black wherever a cell's *center* lies inside the
@@ -363,7 +365,7 @@ fn warped(world: vec2<f32>, cell: f32) -> vec4<f32> {
         let mode = u32(lens.ring_edge.x);
         let patterned = lens.ring_pattern.x > 0.0;
         if ring_i > 0.0 {
-            let color = ring_color(i, snapped, rs * size, cell);
+            let color = ring_color(i, snapped, angle, rs * size, cell);
             if !patterned || mode == 3u {
                 ring_accum += color * ring_i;
                 ring_strength = max(ring_strength, ring_i);
@@ -389,6 +391,7 @@ fn warped(world: vec2<f32>, cell: f32) -> vec4<f32> {
         if weight > active_weight {
             active_weight = weight;
             active_center = center;
+            active_cell = center + snapped;
         }
     }
 
@@ -408,15 +411,16 @@ fn warped(world: vec2<f32>, cell: f32) -> vec4<f32> {
         return vec4<f32>(over_color, 1.0);
     }
 
-    // Dither phase per art-pixel cell, in the owning lens's centered (unrotated)
-    // frame so the quantized blocks stay locked to the hole as it moves. Rotation
-    // is confined to the ring/shadow geometry above, never the lensed background.
+    // Dither phase per art-pixel cell, in the owning lens's centered frame so the
+    // quantized blocks stay locked to the hole as it moves.
     let dither_pos = px::pixel_cell_index(world - active_center, cell);
 
-    // The lit scene plus any ring glow. Fragments outside the ring band stop
-    // here, so the palette match below runs only on the ring.
+    // The lit scene plus any ring glow. Inside the ring band the scene is read
+    // once per art-pixel cell, at its center, so every ring pixel is one uniform
+    // block; fragments outside the band read it per fragment and stop here, so
+    // the palette match below runs only on the ring.
     let ring_mask = max(clamp(ring_strength, 0.0, 1.0), over_alpha);
-    let lit = lensed_scene(world) + ring_accum;
+    let lit = lensed_scene(select(world, active_cell, ring_mask > 0.0)) + ring_accum;
     let scene = vec4<f32>(mix(lit, over_color, over_alpha), 1.0);
     if ring_mask <= 0.0 {
         return scene;
