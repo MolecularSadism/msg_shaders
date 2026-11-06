@@ -169,7 +169,7 @@ shaders that import it.
 
 | msg_shaders | Bevy | Rust |
 |-------------|------|------|
-| 0.6-0.7 | 0.19 | 1.95+ (edition 2024) |
+| 0.6-0.8 | 0.19 | 1.95+ (edition 2024) |
 | 0.2-0.5 | 0.18 | 1.85+ (edition 2024) |
 
 ## Installation
@@ -178,7 +178,7 @@ Not yet on crates.io — depend on the repository:
 
 ```toml
 [dependencies]
-msg_shaders = { git = "https://github.com/MolecularSadism/msg_shaders", tag = "v0.7.0" }
+msg_shaders = { git = "https://github.com/MolecularSadism/msg_shaders", tag = "v0.8.0" }
 ```
 
 The one studio dependency is
