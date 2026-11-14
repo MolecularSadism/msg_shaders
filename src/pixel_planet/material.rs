@@ -4,12 +4,16 @@
 //! its WGSL shader exactly — `ShaderType` and the WGSL std140 layout must agree.
 
 use bevy::{
+    mesh::MeshVertexBufferLayoutRef,
     prelude::*,
-    render::render_resource::{AsBindGroup, ShaderType},
+    render::render_resource::{
+        AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
+    },
     shader::ShaderRef,
-    sprite_render::{AlphaMode2d, Material2d},
+    sprite_render::{AlphaMode2d, Material2d, Material2dKey},
 };
 
+use super::grid::PixelGrid;
 use super::palette::PlanetPalette;
 
 /// Parameters shared by every layer of a single planet.
@@ -32,6 +36,8 @@ pub struct CommonParams {
     /// `strength` widening the stippled edge fade (a pixel-cell rim width for
     /// the planet body).
     pub dither: Option<f32>,
+    /// The space the pixel grid lives in.
+    pub pixel_grid: PixelGrid,
 }
 
 /// A pixel-planet layer material whose surface animates over time.
@@ -53,6 +59,19 @@ macro_rules! impl_material2d {
             }
             fn alpha_mode(&self) -> AlphaMode2d {
                 AlphaMode2d::Blend
+            }
+            fn specialize(
+                descriptor: &mut RenderPipelineDescriptor,
+                _layout: &MeshVertexBufferLayoutRef,
+                key: Material2dKey<Self>,
+            ) -> Result<(), SpecializedMeshPipelineError> {
+                key.bind_group_data.specialize(descriptor);
+                Ok(())
+            }
+        }
+        impl From<&$mat> for PixelGrid {
+            fn from(material: &$mat) -> Self {
+                material.pixel_grid
             }
         }
         impl PlanetMaterial for $mat {
@@ -85,9 +104,12 @@ pub struct NoAtmosphereUniform {
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone)]
+#[bind_group_data(PixelGrid)]
 pub struct NoAtmosphereMaterial {
     #[uniform(0)]
     pub u: NoAtmosphereUniform,
+    /// Selects the pipeline variant; not part of the bind group.
+    pub pixel_grid: PixelGrid,
 }
 
 impl NoAtmosphereMaterial {
@@ -108,6 +130,7 @@ impl NoAtmosphereMaterial {
                 octaves: p.octaves,
                 should_dither: u32::from(p.dither.is_some()),
             },
+            pixel_grid: p.pixel_grid,
         }
     }
 }
@@ -135,9 +158,12 @@ pub struct PlanetUnderUniform {
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone)]
+#[bind_group_data(PixelGrid)]
 pub struct PlanetUnderMaterial {
     #[uniform(0)]
     pub u: PlanetUnderUniform,
+    /// Selects the pipeline variant; not part of the bind group.
+    pub pixel_grid: PixelGrid,
 }
 
 impl PlanetUnderMaterial {
@@ -158,6 +184,7 @@ impl PlanetUnderMaterial {
                 octaves: p.octaves,
                 should_dither: u32::from(p.dither.is_some()),
             },
+            pixel_grid: p.pixel_grid,
         }
     }
 }
@@ -184,9 +211,12 @@ pub struct PlanetLandmassUniform {
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone)]
+#[bind_group_data(PixelGrid)]
 pub struct PlanetLandmassMaterial {
     #[uniform(0)]
     pub u: PlanetLandmassUniform,
+    /// Selects the pipeline variant; not part of the bind group.
+    pub pixel_grid: PixelGrid,
 }
 
 impl PlanetLandmassMaterial {
@@ -206,6 +236,7 @@ impl PlanetLandmassMaterial {
                 edge_dither: p.dither.unwrap_or(0.0),
                 octaves: p.octaves,
             },
+            pixel_grid: p.pixel_grid,
         }
     }
 }
@@ -234,9 +265,12 @@ pub struct CloudsUniform {
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone)]
+#[bind_group_data(PixelGrid)]
 pub struct CloudsMaterial {
     #[uniform(0)]
     pub u: CloudsUniform,
+    /// Selects the pipeline variant; not part of the bind group.
+    pub pixel_grid: PixelGrid,
 }
 
 impl CloudsMaterial {
@@ -258,6 +292,7 @@ impl CloudsMaterial {
                 edge_dither: p.dither.unwrap_or(0.0),
                 octaves: p.octaves,
             },
+            pixel_grid: p.pixel_grid,
         }
     }
 }
@@ -287,9 +322,12 @@ pub struct GasLayersUniform {
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone)]
+#[bind_group_data(PixelGrid)]
 pub struct GasLayersMaterial {
     #[uniform(0)]
     pub u: GasLayersUniform,
+    /// Selects the pipeline variant; not part of the bind group.
+    pub pixel_grid: PixelGrid,
 }
 
 impl GasLayersMaterial {
@@ -312,6 +350,7 @@ impl GasLayersMaterial {
                 n_colors: 3,
                 should_dither: u32::from(p.dither.is_some()),
             },
+            pixel_grid: p.pixel_grid,
         }
     }
 }
@@ -340,9 +379,12 @@ pub struct RingUniform {
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone)]
+#[bind_group_data(PixelGrid)]
 pub struct RingMaterial {
     #[uniform(0)]
     pub u: RingUniform,
+    /// Selects the pipeline variant; not part of the bind group.
+    pub pixel_grid: PixelGrid,
 }
 
 impl RingMaterial {
@@ -364,6 +406,7 @@ impl RingMaterial {
                 octaves: p.octaves,
                 n_colors: 3,
             },
+            pixel_grid: p.pixel_grid,
         }
     }
 }

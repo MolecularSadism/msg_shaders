@@ -146,10 +146,27 @@ fn setup(mut commands: Commands) {
         Visibility::Visible,
     ));
 }
-// App: .add_plugins((DefaultPlugins, PixelPlanetPlugin)).add_systems(Startup, setup)
+// App: .add_plugins((DefaultPlugins, PixelPlanetPlugin::default())).add_systems(Startup, setup)
 ```
 
 Gate the `PlanetSpinSystems` set to freeze the surface spin (e.g. while paused).
+
+The space the planets' pixel grid lives in is a setting on the plugin:
+
+- `PixelPlanetPlugin::default()` — `PixelGrid::Quad`: cells are squares of the
+  planet quad's own UV space, `PlanetSpec::pixels` across the body. The grid
+  turns and moves with the quad.
+- `PixelPlanetPlugin { pixel_grid: PixelGrid::World }` — cells are the unit
+  squares of the integer world grid at any quad rotation and any fractional
+  position: every world pixel gets one flat colour, all layers of a planet share
+  the grid, and the surface turns and drifts underneath it. A cell is always one
+  world unit, so the cell count is the body's world-space width and
+  `PlanetSpec::pixels` is not used. An unrotated planet on whole world pixels
+  whose `pixels` equals its diameter looks the same in both modes.
+
+`PixelPlanetPlugin` was a unit struct up to 0.8.0; replace
+`add_plugins(PixelPlanetPlugin)` with `add_plugins(PixelPlanetPlugin::default())`.
+
 `PixelPlanetShaderLibraryPlugin` registers only the shared
 `msg_shaders::pixel_planet_functions` WGSL module (noise, dithering) for other
 shaders that import it.

@@ -11,6 +11,10 @@
 //! children on the next update: one `Mesh2d` per shader layer, composited back-to-front. Gate
 //! [`PlanetSpinSystems`] to freeze the spin — while paused, say.
 //!
+//! The pixel grid lives in the planet quad's own space by default, so it turns and moves with
+//! the quad. Add the plugin as `PixelPlanetPlugin { pixel_grid: PixelGrid::World }` to pin the
+//! grid to whole world pixels instead; see [`PixelGrid`].
+//!
 //! ```
 //! use bevy::prelude::*;
 //! use msg_shaders::{PixelPlanet, PlanetPalette, PlanetSpec, PlanetType};
@@ -31,13 +35,14 @@
 //!     noise_size: 8.0,
 //! };
 //!
-//! // A real app adds PixelPlanetPlugin here; it needs a render app, which
+//! // A real app adds PixelPlanetPlugin::default() here; it needs a render app, which
 //! // MinimalPlugins does not provide.
 //! let mut app = App::new();
 //! app.add_plugins(MinimalPlugins);
 //! app.world_mut().spawn((PixelPlanet(spec), Transform::default(), Visibility::Visible));
 //! ```
 
+mod grid;
 mod material;
 mod palette;
 mod spawn;
@@ -52,6 +57,7 @@ use material::{
     PlanetUnderMaterial, RingMaterial,
 };
 
+pub use grid::PixelGrid;
 pub use palette::PlanetPalette;
 pub use spawn::{PixelPlanet, PlanetSpec, PlanetType};
 
@@ -85,6 +91,21 @@ pub(crate) const CLOUDS_SHADER: Handle<Shader> =
 pub(crate) const GAS_LAYERS_SHADER: Handle<Shader> =
     uuid_handle!("f6a5b7c9-8013-4f46-9d7e-62a3dc4f5186");
 pub(crate) const RING_SHADER: Handle<Shader> = uuid_handle!("07b6c8da-9124-4037-a28f-73b4ed506297");
+pub(crate) const WORLD_GRID_SHADER: Handle<Shader> =
+    uuid_handle!("18c7d9eb-a235-4148-b39a-84c5fe617308");
+pub(crate) const WORLD_GRID_VERTEX_SHADER: Handle<Shader> =
+    uuid_handle!("29d8eafc-b346-4259-84ab-95d60f728419");
+
+/// Source of the `msg_shaders::pixel_planet_world_grid` WGSL library: the world-pixel snap of
+/// [`PixelGrid::World`], for offline validation.
+pub const PIXEL_PLANET_WORLD_GRID_WGSL: &str =
+    include_str!("../shaders/pixel_planet_world_grid.wgsl");
+
+/// The plugin's settings as the layer-assembly system reads them.
+#[derive(Resource, Clone, Copy)]
+pub(crate) struct PixelPlanetSettings {
+    pub(crate) pixel_grid: PixelGrid,
+}
 
 /// Registers the shared shader library `msg_shaders::pixel_planet_functions` alone (noise,
 /// dithering), for shaders outside this module that import it. [`PixelPlanetPlugin`] adds it
@@ -103,13 +124,37 @@ impl Plugin for PixelPlanetShaderLibraryPlugin {
 }
 
 /// Registers the planet shaders, materials, and the layer-assembly system.
-pub struct PixelPlanetPlugin;
+///
+/// `PixelPlanetPlugin::default()` draws the pixel grid in each planet quad's own space
+/// ([`PixelGrid::Quad`]). A game that rotates its planets or places them off whole pixels, and
+/// wants them on the world's pixel grid regardless, adds
+/// `PixelPlanetPlugin { pixel_grid: PixelGrid::World }`.
+#[derive(Default, Clone, Copy, Debug)]
+pub struct PixelPlanetPlugin {
+    /// The space the pixel grid of every planet lives in.
+    pub pixel_grid: PixelGrid,
+}
 
 impl Plugin for PixelPlanetPlugin {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<PixelPlanetShaderLibraryPlugin>() {
             app.add_plugins(PixelPlanetShaderLibraryPlugin);
         }
+        app.insert_resource(PixelPlanetSettings {
+            pixel_grid: self.pixel_grid,
+        });
+        load_internal_asset!(
+            app,
+            WORLD_GRID_SHADER,
+            "../shaders/pixel_planet_world_grid.wgsl",
+            Shader::from_wgsl
+        );
+        load_internal_asset!(
+            app,
+            WORLD_GRID_VERTEX_SHADER,
+            "../shaders/pixel_planet_world_grid_vertex.wgsl",
+            Shader::from_wgsl
+        );
         load_internal_asset!(
             app,
             NO_ATMOSPHERE_SHADER,

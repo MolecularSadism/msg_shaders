@@ -64,34 +64,104 @@ fn blackhole_functions_is_valid_wgsl() {
     validate("blackhole_functions", &src);
 }
 
-/// Minimal stand-in for `bevy_sprite::mesh2d_vertex_output::VertexOutput`,
-/// providing the `uv` field the planet fragments read.
-const PLANET_VERTEX_OUTPUT_STUB: &str = "\
+/// Offline stand-in for the naga-oil preprocessing Bevy applies to the planet
+/// shaders: inlines the libraries a layer imports, drops the `#import` /
+/// `#define_import_path` directives and resolves `#ifdef` / `#else` / `#endif`
+/// against a set of shader defs, leaving plain WGSL naga can validate.
+struct PlanetShaderComposer {
+    /// Shader defs that are set.
+    defs: &'static [&'static str],
+}
+
+impl PlanetShaderComposer {
+    /// The pipelines of `PixelGrid::Quad`: no shader def.
+    const QUAD: Self = Self { defs: &[] };
+    /// The pipelines of `PixelGrid::World`.
+    const WORLD: Self = Self {
+        defs: &["PIXEL_GRID_WORLD"],
+    };
+
+    /// Minimal stand-in for `bevy_sprite::mesh2d_vertex_output::VertexOutput`,
+    /// providing the fields the planet fragments read.
+    const VERTEX_OUTPUT_STUB: &str = "\
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) world_position: vec4<f32>,
-    @location(1) uv: vec2<f32>,
+    @location(2) uv: vec2<f32>,
 };
 ";
 
-/// A planet layer shader with the shared library inlined and the naga-oil
-/// `#import` / `#define_import_path` directives stripped, as plain WGSL.
-fn compose_planet_layer(shader: &str) -> String {
-    let common = include_str!("../src/shaders/pixel_planet_functions.wgsl");
-    let mut out = String::from(PLANET_VERTEX_OUTPUT_STUB);
-    for source in [common, shader] {
+    /// Stand-ins for the `bevy_sprite::mesh2d_functions` the world-grid vertex
+    /// stage calls (through the `mesh_functions::` alias, stripped on compose).
+    const MESH_FUNCTIONS_STUB: &str = "\
+fn get_world_from_local(instance_index: u32) -> mat4x4<f32> {
+    let s = f32(instance_index);
+    return mat4x4<f32>(
+        vec4<f32>(s, 0.0, 0.0, 0.0),
+        vec4<f32>(0.0, s, 0.0, 0.0),
+        vec4<f32>(0.0, 0.0, 1.0, 0.0),
+        vec4<f32>(0.0, 0.0, 0.0, 1.0),
+    );
+}
+fn mesh2d_position_local_to_world(world_from_local: mat4x4<f32>, p: vec4<f32>) -> vec4<f32> {
+    return world_from_local * p;
+}
+fn mesh2d_position_world_to_clip(world_position: vec4<f32>) -> vec4<f32> {
+    return world_position;
+}
+";
+
+    /// `source` with the directives resolved against `self.defs`.
+    fn preprocess(&self, source: &str) -> String {
+        let mut out = String::new();
+        // One entry per open `#ifdef`: whether its current branch is kept.
+        let mut branches: Vec<bool> = Vec::new();
         for line in source.lines() {
-            let trimmed = line.trim_start();
-            if trimmed.starts_with("#import") || trimmed.starts_with("#define_import_path") {
-                continue;
+            let trimmed = line.trim();
+            if let Some(def) = trimmed.strip_prefix("#ifdef") {
+                branches.push(self.defs.contains(&def.trim()));
+            } else if trimmed == "#else" {
+                let kept = branches.pop().expect("#else without #ifdef");
+                branches.push(!kept);
+            } else if trimmed == "#endif" {
+                branches.pop().expect("#endif without #ifdef");
+            } else if trimmed.starts_with('#') {
+                // `#import` / `#define_import_path`: the libraries are inlined.
+            } else if branches.iter().all(|kept| *kept) {
+                out.push_str(line);
+                out.push('\n');
             }
-            out.push_str(line);
-            out.push('\n');
         }
+        assert!(branches.is_empty(), "unterminated #ifdef");
+        out
     }
-    out
+
+    /// A planet layer's fragment shader as plain WGSL.
+    fn layer(&self, shader: &str) -> String {
+        [
+            Self::VERTEX_OUTPUT_STUB,
+            include_str!("../src/shaders/pixel_planet_functions.wgsl"),
+            include_str!("../src/shaders/pixel_planet_world_grid.wgsl"),
+            shader,
+        ]
+        .map(|source| self.preprocess(source))
+        .concat()
+    }
+
+    /// The world-grid vertex shader as plain WGSL.
+    fn world_grid_vertex(&self) -> String {
+        [
+            Self::MESH_FUNCTIONS_STUB,
+            include_str!("../src/shaders/pixel_planet_world_grid.wgsl"),
+            include_str!("../src/shaders/pixel_planet_world_grid_vertex.wgsl"),
+        ]
+        .map(|source| self.preprocess(source))
+        .concat()
+        .replace("mesh_functions::", "")
+    }
 }
 
+/// Every planet layer validates in both pixel-grid modes.
 #[test]
 fn pixel_planet_shaders_are_valid_wgsl() {
     for (label, shader) in [
@@ -120,6 +190,31 @@ fn pixel_planet_shaders_are_valid_wgsl() {
             include_str!("../src/shaders/pixel_planet_ring.wgsl"),
         ),
     ] {
-        validate(label, &compose_planet_layer(shader));
+        for (mode, composer) in [
+            ("quad", PlanetShaderComposer::QUAD),
+            ("world", PlanetShaderComposer::WORLD),
+        ] {
+            let source = composer.layer(shader);
+            // Each mode must read its own vertex output and nothing of the other's.
+            assert_eq!(
+                source.contains("world_grid_cell(mesh)"),
+                mode == "world",
+                "{label} ({mode}): wrong snap branch"
+            );
+            assert_eq!(
+                source.contains("floor(mesh.uv * u.pixels)"),
+                mode == "quad",
+                "{label} ({mode}): wrong snap branch"
+            );
+            validate(&format!("{label} ({mode})"), &source);
+        }
     }
+}
+
+#[test]
+fn pixel_planet_world_grid_vertex_is_valid_wgsl() {
+    validate(
+        "pixel_planet_world_grid_vertex",
+        &PlanetShaderComposer::WORLD.world_grid_vertex(),
+    );
 }

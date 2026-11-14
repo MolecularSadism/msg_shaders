@@ -5,6 +5,8 @@ use bevy::prelude::*;
 
 use bevy::sprite_render::Material2d;
 
+use super::PixelPlanetSettings;
+use super::grid::PixelGrid;
 use super::material::{
     CloudsMaterial, CommonParams, GasLayersMaterial, NoAtmosphereMaterial, PlanetLandmassMaterial,
     PlanetMaterial, PlanetUnderMaterial, RingMaterial,
@@ -68,7 +70,8 @@ pub struct PlanetSpec {
     /// hard edges and solid colour bands; `Some(strength)` enables both, with
     /// `strength` widening the stippled edge fade.
     pub dither: Option<f32>,
-    /// Pixelation resolution.
+    /// Pixelation resolution: pixel cells across the planet body. Not used under
+    /// [`PixelGrid::World`], where a cell is always one world unit.
     pub pixels: f32,
     /// fbm octave count.
     pub octaves: i32,
@@ -77,7 +80,7 @@ pub struct PlanetSpec {
 }
 
 impl PlanetSpec {
-    fn common(&self) -> CommonParams {
+    fn common(&self, pixel_grid: PixelGrid) -> CommonParams {
         CommonParams {
             light_origin: self.light_origin,
             pixels: self.pixels,
@@ -86,6 +89,7 @@ impl PlanetSpec {
             seed: self.seed,
             octaves: self.octaves,
             dither: self.dither,
+            pixel_grid,
         }
     }
 }
@@ -120,6 +124,7 @@ const RING_SCALE_REL_TO_PLANET: f32 = 4.0;
 /// Builds the layer children for every newly-added [`PixelPlanet`].
 pub(crate) fn build_pixel_planets(
     mut commands: Commands,
+    settings: Res<PixelPlanetSettings>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut m_barren: ResMut<Assets<NoAtmosphereMaterial>>,
     mut m_under: ResMut<Assets<PlanetUnderMaterial>>,
@@ -131,7 +136,7 @@ pub(crate) fn build_pixel_planets(
 ) {
     for (entity, planet) in &q {
         let spec = &planet.0;
-        let common = spec.common();
+        let common = spec.common(settings.pixel_grid);
         let spin = PlanetSpin {
             speed: spec.rotation_speed,
         };

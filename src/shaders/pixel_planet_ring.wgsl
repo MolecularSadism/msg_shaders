@@ -4,7 +4,11 @@
 // `1.0 / scale_rel_to_planet` of this quad, and the ring's back half is masked
 // where it would pass behind that disc.
 
+#ifdef PIXEL_GRID_WORLD
+#import msg_shaders::pixel_planet_world_grid::{WorldGridVertexOutput, world_grid_cell, world_grid_checker}
+#else
 #import bevy_sprite::mesh2d_vertex_output::VertexOutput
+#endif
 #import msg_shaders::pixel_planet_functions::{fbm_v, rotate_uv, dither_coverage}
 
 struct U {
@@ -31,12 +35,21 @@ struct U {
 // crossing of `ring` past its alpha threshold.
 const EDGE_DITHER_RING_SCALE: f32 = 0.04;
 
+// The pixel cell this fragment belongs to: `uv` is its lookup point, `cell` its
+// integer coordinate. `PixelGrid` picks the space the cells live in.
+#ifdef PIXEL_GRID_WORLD
+@fragment
+fn fragment(mesh: WorldGridVertexOutput) -> @location(0) vec4<f32> {
+    let grid = world_grid_cell(mesh);
+    var uv = grid.uv;
+    let cell = grid.cell;
+#else
 @fragment
 fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
-    let tile = vec2<f32>(2.0, 1.0);
-
     var uv = floor(mesh.uv * u.pixels) / u.pixels;
     let cell = floor(mesh.uv * u.pixels);
+#endif
+    let tile = vec2<f32>(2.0, 1.0);
 
     let light_d = distance(uv, u.light_origin);
     uv = rotate_uv(uv, u.rotation);

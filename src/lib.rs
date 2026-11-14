@@ -22,7 +22,8 @@
 //!   palette with dithering, reusing the quantization and pixelation modules above.
 //! - [`PixelPlanetPlugin`] — pixel-art planets (barren, terran, gas giant; optional clouds and
 //!   ring) with a caller-injected [`PlanetPalette`]. Spawn a [`PixelPlanet`]; its shader layers
-//!   are added as `Mesh2d` children. Ported from Deep-Fold's PixelPlanets.
+//!   are added as `Mesh2d` children. Ported from Deep-Fold's PixelPlanets. [`PixelGrid`], set
+//!   on the plugin, picks whether the pixel grid follows each planet quad or the world grid.
 //!
 //! # Feature flags
 //!
@@ -93,9 +94,9 @@ pub use nebula::{
 // Pixel-art planets.
 #[cfg(feature = "render_2d")]
 pub use pixel_planet::{
-    PIXEL_PLANET_FUNCTIONS_SHADER_HANDLE, PIXEL_PLANET_FUNCTIONS_WGSL, PixelPlanet,
-    PixelPlanetPlugin, PixelPlanetShaderLibraryPlugin, PlanetPalette, PlanetSpec,
-    PlanetSpinSystems, PlanetType,
+    PIXEL_PLANET_FUNCTIONS_SHADER_HANDLE, PIXEL_PLANET_FUNCTIONS_WGSL,
+    PIXEL_PLANET_WORLD_GRID_WGSL, PixelGrid, PixelPlanet, PixelPlanetPlugin,
+    PixelPlanetShaderLibraryPlugin, PlanetPalette, PlanetSpec, PlanetSpinSystems, PlanetType,
 };
 
 pub mod prelude {
@@ -112,8 +113,8 @@ pub mod prelude {
     pub use super::{
         DeflectionShape, DeflectionSource, LENSING_FIELD_RES, LensingFieldPlugin,
         LensingFieldSettings, LightDeflectionRequest, LightDeflector, MAX_DEFLECTION_SOURCES,
-        PixelPlanet, PixelPlanetPlugin, PlanetPalette, PlanetSpec, PlanetSpinSystems, PlanetType,
-        RING_EDGE_FADE,
+        PixelGrid, PixelPlanet, PixelPlanetPlugin, PlanetPalette, PlanetSpec, PlanetSpinSystems,
+        PlanetType, RING_EDGE_FADE,
     };
 }
 
