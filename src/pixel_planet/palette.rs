@@ -11,7 +11,7 @@ use bevy::prelude::*;
 ///
 /// The crate samples this ramp to fill the discrete `colors[]` / `dark_colors[]`
 /// uniform arrays each shader expects.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Reflect)]
 pub struct PlanetPalette {
     /// Linear-space RGBA ramp, ordered brightest → darkest. Always non-empty.
     ramp: Vec<Vec4>,
