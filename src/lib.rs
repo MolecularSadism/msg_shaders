@@ -353,11 +353,13 @@ impl HoleQuantization {
 /// Type alias preserving backward compatibility with `BlackHoleQuantization`.
 pub type BlackHoleQuantization = HoleQuantization;
 
-#[derive(Component)]
+#[derive(Component, Reflect)]
+#[reflect(Component)]
 struct BlackHoleMesh;
 
 /// Shared 1×1 quad mesh used by both the black hole and lensing hole meshes.
-#[derive(Resource)]
+#[derive(Resource, Reflect)]
+#[reflect(Resource)]
 struct HoleQuadMesh(Handle<Mesh>);
 
 /// Returns the shared unit-quad mesh, inserting the resource on first use so a

@@ -396,7 +396,8 @@ impl Material2d for NebulaMaterial {
 /// records the [`Nebula::size`] its quad was built from. The shader maps UVs
 /// back to world units through the `world_size` uniform, so a stale extent here
 /// scales every world-space quantity it derives, the art-pixel grid included.
-#[derive(Component)]
+#[derive(Component, Reflect)]
+#[reflect(Component)]
 struct NebulaMesh(Vec2);
 
 /// Plugin that registers the nebula material and drives it.

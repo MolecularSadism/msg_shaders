@@ -77,6 +77,7 @@ pub struct DeflectionSource {
 /// [`LightDeflectionRequest`] message; [`DeflectionShape::pack`] lays it out for
 /// the inject shader.
 #[derive(Component, Reflect, Clone, Copy, Debug, PartialEq)]
+#[reflect(Component)]
 pub enum DeflectionShape {
     /// Radial outward deflection falling monotonically from an inner radius to
     /// the rim — the gravitational-lens source.
@@ -290,7 +291,8 @@ impl LightDeflector {
 /// One-shot, fire-and-forget deflection source for a single frame (e.g. a sword
 /// swipe at impact), needing no entity. The [`shape`](Self::shape) is in world
 /// space, fully resolved by the caller.
-#[derive(Message, Clone, Debug)]
+#[derive(Message, Reflect, Clone, Debug)]
+#[reflect(Message)]
 pub struct LightDeflectionRequest {
     /// Shape in world space.
     pub shape: DeflectionShape,

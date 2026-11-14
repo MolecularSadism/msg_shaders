@@ -42,7 +42,7 @@ impl PlanetType {
 
 /// Full description of a planet to spawn. The light direction and any
 /// randomization are decided by the caller; the crate just renders it.
-#[derive(Clone)]
+#[derive(Clone, Reflect)]
 pub struct PlanetSpec {
     /// Which layer stack to build.
     pub planet_type: PlanetType,
@@ -93,13 +93,15 @@ impl PlanetSpec {
 /// Component requesting a pixel-art planet. Spawn it on an entity (positioned
 /// wherever you want the planet, e.g. as a child of a level root) and the crate
 /// fills in the layered visual as children on the next update.
-#[derive(Component, Clone)]
+#[derive(Component, Reflect, Clone)]
+#[reflect(Component)]
 pub struct PixelPlanet(pub PlanetSpec);
 
 /// Per-layer surface rotation speed, copied from [`PlanetSpec::rotation_speed`]
 /// onto each spawned layer entity. [`advance_planet_spin`] reads it to advance
 /// that layer material's `time` uniform every frame.
-#[derive(Component, Clone, Copy)]
+#[derive(Component, Reflect, Clone, Copy)]
+#[reflect(Component)]
 pub(crate) struct PlanetSpin {
     /// Shader `time` units added per second.
     pub(crate) speed: f32,
