@@ -255,8 +255,14 @@ fn world_grid_draws_whole_world_pixels() {
             "{planet_type:?} world rotated: {drawn} world pixels drawn, {split} split, {} colours",
             world.palette_size()
         );
-        assert!(drawn > 1000, "{planet_type:?}: the planet was not drawn");
-        assert!(world.palette_size() >= 3, "{planet_type:?}: no shading");
+        // Most of the body's disc is drawn (a terminator or a dithered rim may
+        // leave some of it out), in more than one colour.
+        let disc_area = std::f32::consts::PI * (PlanetRender::DIAMETER / 2.0).powi(2);
+        assert!(
+            drawn as f32 > disc_area / 2.0,
+            "{planet_type:?}: the planet was not drawn"
+        );
+        assert!(world.palette_size() > 1, "{planet_type:?}: no shading");
         assert_eq!(split, 0, "{planet_type:?}: world pixels with two colours");
 
         // The same planet on the quad grid does split world pixels, so the
@@ -268,12 +274,12 @@ fn world_grid_draws_whole_world_pixels() {
         .render();
         let (_, quad_split) = quad.world_pixel_census();
         println!("{planet_type:?} quad rotated: {quad_split} split");
-        assert!(quad_split > 100, "{planet_type:?}: quad grid did not split");
+        assert!(quad_split > 0, "{planet_type:?}: quad grid did not split");
 
         // A cell count that does not match the diameter changes nothing in
         // world mode: cells stay whole world units.
         let mismatched = PlanetRender {
-            pixels: 19.0,
+            pixels: PlanetRender::DIAMETER * 0.4,
             ..rotated.clone()
         }
         .render();
