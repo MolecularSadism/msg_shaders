@@ -653,8 +653,13 @@ mod tests {
 
         let u = nebula.to_uniforms(0.0);
         assert_eq!(u.layers[0].c2, Vec4::from_array(marker));
-        for i in 1..u.num_layers as usize {
-            let l = u.layers[i];
+        for (i, l) in u
+            .layers
+            .iter()
+            .enumerate()
+            .take(u.num_layers as usize)
+            .skip(1)
+        {
             let m = Vec4::from_array(marker);
             assert!(l.c1 != m && l.c2 != m && l.c3 != m, "layer {i} saw layer 0");
         }

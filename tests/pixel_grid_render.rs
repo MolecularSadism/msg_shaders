@@ -214,10 +214,9 @@ impl RenderedPlanet {
     /// Distinct opaque colours in the whole image.
     fn palette_size(&self) -> usize {
         let mut colours: Vec<[u8; 4]> = Vec::new();
-        for texel in self.rgba.chunks_exact(4) {
-            let colour = [texel[0], texel[1], texel[2], texel[3]];
-            if colour[3] != 0 && !colours.contains(&colour) {
-                colours.push(colour);
+        for colour in self.rgba.as_chunks::<4>().0 {
+            if colour[3] != 0 && !colours.contains(colour) {
+                colours.push(*colour);
             }
         }
         colours.len()
@@ -226,8 +225,10 @@ impl RenderedPlanet {
     /// Texels that differ from `other`.
     fn texels_differing_from(&self, other: &RenderedPlanet) -> usize {
         self.rgba
-            .chunks_exact(4)
-            .zip(other.rgba.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(other.rgba.as_chunks::<4>().0)
             .filter(|(a, b)| a != b)
             .count()
     }
