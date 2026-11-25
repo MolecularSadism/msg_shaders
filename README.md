@@ -133,7 +133,12 @@ fn setup(mut commands: Commands) {
             palette: PlanetPalette::new([Color::srgb(0.4, 0.8, 0.9), Color::srgb(0.05, 0.1, 0.3)]),
             seed: 3.0,
             rotation: 0.0,
-            rotation_speed: 0.05,
+            // Radians per second about the pole.
+            rotation_speed: 0.03,
+            // Pole leaning toward the viewer, in radians.
+            tilt: 0.3,
+            // Sine latitude past which ice caps cover the poles.
+            pole_cap: Some(0.9),
             light_origin: Vec2::new(0.35, 0.35),
             clouds: true,
             ring: false,
@@ -150,6 +155,10 @@ fn setup(mut commands: Commands) {
 ```
 
 Gate the `PlanetSpinSystems` set to freeze the surface spin (e.g. while paused).
+A `PlanetOrientation` on the planet entity adds tilt and spin at runtime (a camera
+flying around it), and a `PlanetLight` moves its highlight; both redraw the layers
+only when they change. `cargo run --example planet_orbit` turns a planet on every
+axis from the keyboard.
 `PixelPlanetShaderLibraryPlugin` registers only the shared
 `msg_shaders::pixel_planet_functions` WGSL module (noise, dithering) for other
 shaders that import it.

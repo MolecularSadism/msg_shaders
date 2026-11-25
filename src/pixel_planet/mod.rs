@@ -11,6 +11,14 @@
 //! children on the next update: one `Mesh2d` per shader layer, composited back-to-front. Gate
 //! [`PlanetSpinSystems`] to freeze the spin — while paused, say.
 //!
+//! A planet turns on all three axes. Roll is the entity's own rotation (light included) or
+//! [`PlanetSpec::rotation`] (surface only). Tilt leans the pole toward the viewer
+//! ([`PlanetSpec::tilt`]) and spin turns the surface about the pole
+//! ([`PlanetSpec::rotation_speed`]); [`PlanetOrientation`] adds to both at runtime, and
+//! [`PlanetLight`] moves the highlight. Each layer keeps its 2D noise and only changes where it
+//! samples it: a disc point is lifted onto the tilted sphere and read as longitude and sine
+//! latitude.
+//!
 //! ```
 //! use bevy::prelude::*;
 //! use msg_shaders::{PixelPlanet, PlanetPalette, PlanetSpec, PlanetType};
@@ -21,7 +29,9 @@
 //!     palette: PlanetPalette::new([Color::srgb(0.9, 0.7, 0.4), Color::srgb(0.2, 0.1, 0.05)]),
 //!     seed: 4.0,
 //!     rotation: 0.3,
-//!     rotation_speed: 0.05,
+//!     rotation_speed: 0.03,
+//!     tilt: 0.35,
+//!     pole_cap: Some(0.9),
 //!     light_origin: Vec2::new(0.35, 0.35),
 //!     clouds: false,
 //!     ring: true,
@@ -53,10 +63,11 @@ use material::{
 };
 
 pub use palette::PlanetPalette;
-pub use spawn::{PixelPlanet, PlanetSpec, PlanetType};
+pub use spawn::{PixelPlanet, PlanetLight, PlanetOrientation, PlanetSpec, PlanetType};
 
-/// System set containing the per-frame surface-animation systems that advance
-/// each planet material's `time` uniform (the spin effect).
+/// System set containing the per-material systems that advance each planet's
+/// spin and write its view ([`PlanetOrientation`], [`PlanetLight`]) into the
+/// layer materials.
 ///
 /// Grouped so consumers can gate the animation without knowing the individual
 /// per-material systems — e.g. configure this set to run only while unpaused so
@@ -160,13 +171,14 @@ impl Plugin for PixelPlanetPlugin {
         app.add_systems(
             Update,
             (
-                spawn::advance_planet_spin::<NoAtmosphereMaterial>,
-                spawn::advance_planet_spin::<PlanetUnderMaterial>,
-                spawn::advance_planet_spin::<PlanetLandmassMaterial>,
-                spawn::advance_planet_spin::<CloudsMaterial>,
-                spawn::advance_planet_spin::<GasLayersMaterial>,
-                spawn::advance_planet_spin::<RingMaterial>,
+                spawn::update_planet_views::<NoAtmosphereMaterial>,
+                spawn::update_planet_views::<PlanetUnderMaterial>,
+                spawn::update_planet_views::<PlanetLandmassMaterial>,
+                spawn::update_planet_views::<CloudsMaterial>,
+                spawn::update_planet_views::<GasLayersMaterial>,
+                spawn::update_planet_views::<RingMaterial>,
             )
+                .after(spawn::build_pixel_planets)
                 .in_set(PlanetSpinSystems),
         );
     }

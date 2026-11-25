@@ -6,8 +6,8 @@ use bevy::prelude::*;
 use bevy::sprite_render::Material2d;
 
 use super::material::{
-    CloudsMaterial, CommonParams, GasLayersMaterial, NoAtmosphereMaterial, PlanetLandmassMaterial,
-    PlanetMaterial, PlanetUnderMaterial, RingMaterial,
+    CloudsMaterial, CommonParams, GasLayersMaterial, LayerView, NoAtmosphereMaterial,
+    PlanetLandmassMaterial, PlanetMaterial, PlanetUnderMaterial, RingMaterial,
 };
 use super::palette::PlanetPalette;
 
@@ -52,12 +52,18 @@ pub struct PlanetSpec {
     pub palette: PlanetPalette,
     /// Noise seed (`1.0..=10.0`).
     pub seed: f32,
-    /// Surface tilt in radians (handled inside the shader, not on the entity).
+    /// Roll about the view axis in radians, turning the surface and ring inside
+    /// the shader while the light stays put.
     pub rotation: f32,
-    /// Surface rotation speed: how fast the shader `time` advances each second,
-    /// scrolling the surface so the planet appears to spin. `0.0` is static;
-    /// negative values reverse the spin direction.
+    /// Spin about the pole in radians per second. `0.0` is static; negative
+    /// values reverse the spin direction.
     pub rotation_speed: f32,
+    /// Pole tilt toward the viewer in radians. `0.0` keeps the pole in the
+    /// screen plane, so a ring is seen edge-on; `±π/2` looks straight down a pole.
+    pub tilt: f32,
+    /// Sine latitude in `0.0..=1.0` past which polar caps cover the surface.
+    /// `None` leaves the poles bare.
+    pub pole_cap: Option<f32>,
     /// Highlight position in `[0, 1]` UV space (the lit side of the planet).
     pub light_origin: Vec2,
     /// Include the cloud layer (only meaningful when the type supports it).
@@ -82,6 +88,8 @@ impl PlanetSpec {
             light_origin: self.light_origin,
             pixels: self.pixels,
             rotation: self.rotation,
+            tilt: self.tilt,
+            pole_cap: self.pole_cap,
             size: self.noise_size,
             seed: self.seed,
             octaves: self.octaves,
@@ -97,14 +105,72 @@ impl PlanetSpec {
 #[reflect(Component)]
 pub struct PixelPlanet(pub PlanetSpec);
 
-/// Per-layer surface rotation speed, copied from [`PlanetSpec::rotation_speed`]
-/// onto each spawned layer entity. [`advance_planet_spin`] reads it to advance
-/// that layer material's `time` uniform every frame.
+/// Turns a [`PixelPlanet`] on top of its spec: a camera moving around it, say.
+///
+/// Optional, on the entity carrying the `PixelPlanet`. `tilt` adds to
+/// [`PlanetSpec::tilt`] and `spin` to the angle the planet has spun by, both in
+/// radians. A change redraws the layers once; a planet whose orientation stays
+/// put costs nothing.
+#[derive(Component, Reflect, Clone, Copy, Debug, Default, PartialEq)]
+#[reflect(Component, Default)]
+pub struct PlanetOrientation {
+    /// Pole tilt toward the viewer, added to the spec's.
+    pub tilt: f32,
+    /// Spin about the pole, added to the accumulated spin.
+    pub spin: f32,
+}
+
+/// Moves a [`PixelPlanet`]'s highlight after spawn, replacing
+/// [`PlanetSpec::light_origin`] while present: a phase that follows a day
+/// cycle, say. Optional, on the entity carrying the `PixelPlanet`; the light
+/// stays in screen space.
+#[derive(Component, Reflect, Clone, Copy, Debug, PartialEq)]
+#[reflect(Component)]
+pub struct PlanetLight {
+    /// Highlight location in `[0, 1]` UV space.
+    pub origin: Vec2,
+}
+
+/// Per-layer view state: the spec's spin speed, base tilt and light, and the
+/// angle spun so far. [`update_planet_views`] writes it, with the planet's
+/// [`PlanetOrientation`] and [`PlanetLight`], into the layer material.
 #[derive(Component, Reflect, Clone, Copy)]
 #[reflect(Component)]
 pub(crate) struct PlanetSpin {
-    /// Shader `time` units added per second.
+    /// Radians per second.
     pub(crate) speed: f32,
+    /// Spin so far, in radians, within `[0, 2π)`.
+    pub(crate) angle: f32,
+    /// [`PlanetSpec::tilt`].
+    pub(crate) tilt: f32,
+    /// [`PlanetSpec::light_origin`].
+    pub(crate) light_origin: Vec2,
+}
+
+impl PlanetSpin {
+    fn for_spec(spec: &PlanetSpec) -> Self {
+        Self {
+            speed: spec.rotation_speed,
+            angle: 0.0,
+            tilt: spec.tilt,
+            light_origin: spec.light_origin,
+        }
+    }
+
+    /// The layer's view under `orientation` and `light`.
+    pub(crate) fn view(
+        &self,
+        orientation: Option<&PlanetOrientation>,
+        light: Option<&PlanetLight>,
+    ) -> LayerView {
+        let orientation = orientation.copied().unwrap_or_default();
+        LayerView {
+            // A whole revolution is a whole noise period, so wrapping keeps the surface seamless.
+            spin: (self.angle + orientation.spin).rem_euclid(std::f32::consts::TAU),
+            tilt: self.tilt + orientation.tilt,
+            light_origin: light.map_or(self.light_origin, |light| light.origin),
+        }
+    }
 }
 
 // Local-Z offsets so the layers composite back-to-front within one planet. The
@@ -134,9 +200,7 @@ pub(crate) fn build_pixel_planets(
     for (entity, planet) in &q {
         let spec = &planet.0;
         let common = spec.common();
-        let spin = PlanetSpin {
-            speed: spec.rotation_speed,
-        };
+        let spin = PlanetSpin::for_spec(spec);
         let body_mesh = meshes.add(Rectangle::new(spec.diameter, spec.diameter));
 
         match spec.planet_type {
@@ -238,21 +302,190 @@ fn spawn_layer<M: Material2d>(
     ));
 }
 
-/// Advances the `time` uniform of every animated planet layer of material type
-/// `M`, scrolling its surface so the planet appears to spin. Registered once per
-/// layer material in [`super::PixelPlanetPlugin`].
-pub(crate) fn advance_planet_spin<M: Material2d + PlanetMaterial>(
+/// Advances the spin of every planet layer of material type `M` and writes its
+/// view into the material. A layer is written only while it spins, when it is
+/// new, or when its planet's [`PlanetOrientation`] or [`PlanetLight`] changed,
+/// so a still planet makes no asset writes. Registered once per layer material
+/// in [`super::PixelPlanetPlugin`].
+pub(crate) fn update_planet_views<M: Material2d + PlanetMaterial>(
     time: Res<Time>,
     mut materials: ResMut<Assets<M>>,
-    q: Query<(&MeshMaterial2d<M>, &PlanetSpin)>,
+    mut q_layers: Query<(&MeshMaterial2d<M>, &mut PlanetSpin, &ChildOf)>,
+    q_planets: Query<(Option<Ref<PlanetOrientation>>, Option<Ref<PlanetLight>>)>,
 ) {
     let dt = time.delta_secs();
-    for (handle, spin) in &q {
-        if spin.speed.abs() < f32::EPSILON {
+    for (handle, mut spin, child_of) in &mut q_layers {
+        let (orientation, light) = q_planets.get(child_of.parent()).unwrap_or((None, None));
+        let spinning = spin.speed != 0.0;
+        let moved = spin.is_added()
+            || orientation.as_ref().is_some_and(Ref::is_changed)
+            || light.as_ref().is_some_and(Ref::is_changed);
+        if !spinning && !moved {
             continue;
         }
+        if spinning {
+            spin.angle = (spin.angle + spin.speed * dt).rem_euclid(std::f32::consts::TAU);
+        }
+        let view = spin.view(orientation.as_deref(), light.as_deref());
         if let Some(mut material) = materials.get_mut(&handle.0) {
-            *material.time_mut() += spin.speed * dt;
+            material.set_view(view);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use bevy::time::TimeUpdateStrategy;
+
+    use super::*;
+
+    /// Counts the frames the view system wrote `Assets<NoAtmosphereMaterial>`.
+    #[derive(Resource, Default)]
+    struct Writes(u32);
+
+    fn count_writes(materials: Res<Assets<NoAtmosphereMaterial>>, mut writes: ResMut<Writes>) {
+        if materials.is_changed() {
+            writes.0 += 1;
+        }
+    }
+
+    struct ViewTestPlugin;
+
+    impl Plugin for ViewTestPlugin {
+        fn build(&self, app: &mut App) {
+            app.add_plugins(MinimalPlugins)
+                .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+                    100,
+                )))
+                .init_resource::<Assets<NoAtmosphereMaterial>>()
+                .init_resource::<Writes>()
+                .add_systems(
+                    Update,
+                    (update_planet_views::<NoAtmosphereMaterial>, count_writes).chain(),
+                );
+        }
+    }
+
+    fn spec(rotation_speed: f32) -> PlanetSpec {
+        PlanetSpec {
+            planet_type: PlanetType::Barren,
+            diameter: 10.0,
+            palette: PlanetPalette::new([Color::WHITE]),
+            seed: 1.0,
+            rotation: 0.0,
+            rotation_speed,
+            tilt: 0.25,
+            pole_cap: None,
+            light_origin: Vec2::splat(0.4),
+            clouds: false,
+            ring: false,
+            dither: None,
+            pixels: 10.0,
+            octaves: 1,
+            noise_size: 4.0,
+        }
+    }
+
+    /// A planet entity with one barren layer; returns the planet and the layer's material.
+    fn spawn_planet(app: &mut App, spec: &PlanetSpec) -> (Entity, Handle<NoAtmosphereMaterial>) {
+        let material = app
+            .world_mut()
+            .resource_mut::<Assets<NoAtmosphereMaterial>>()
+            .add(NoAtmosphereMaterial::new(spec.common(), &spec.palette));
+        let planet = app.world_mut().spawn_empty().id();
+        app.world_mut().spawn((
+            MeshMaterial2d(material.clone()),
+            PlanetSpin::for_spec(spec),
+            ChildOf(planet),
+        ));
+        (planet, material)
+    }
+
+    fn uniform(
+        app: &App,
+        material: &Handle<NoAtmosphereMaterial>,
+    ) -> super::super::material::NoAtmosphereUniform {
+        app.world()
+            .resource::<Assets<NoAtmosphereMaterial>>()
+            .get(material)
+            .expect("material")
+            .u
+    }
+
+    fn writes(app: &App) -> u32 {
+        app.world().resource::<Writes>().0
+    }
+
+    #[test]
+    fn a_still_planet_is_written_once_and_then_left_alone() {
+        let mut app = App::new();
+        app.add_plugins(ViewTestPlugin);
+        spawn_planet(&mut app, &spec(0.0));
+        app.update();
+        let first = writes(&app);
+        for _ in 0..5 {
+            app.update();
+        }
+        assert_eq!(writes(&app), first, "no writes after the first view");
+    }
+
+    #[test]
+    fn an_orientation_change_rewrites_a_still_planet_once() {
+        let mut app = App::new();
+        app.add_plugins(ViewTestPlugin);
+        let spec = spec(0.0);
+        let (planet, material) = spawn_planet(&mut app, &spec);
+        app.update();
+        app.update();
+        let before = writes(&app);
+
+        let orientation = PlanetOrientation {
+            tilt: 0.5,
+            spin: 1.0,
+        };
+        app.world_mut().entity_mut(planet).insert(orientation);
+        app.update();
+        app.update();
+        assert_eq!(writes(&app), before + 1);
+
+        let u = uniform(&app, &material);
+        assert_eq!(u.tilt_cs, Vec2::from_angle(spec.tilt + orientation.tilt));
+        assert_eq!(u.time, orientation.spin);
+    }
+
+    #[test]
+    fn a_planet_light_replaces_the_spec_highlight() {
+        let mut app = App::new();
+        app.add_plugins(ViewTestPlugin);
+        let (planet, material) = spawn_planet(&mut app, &spec(0.0));
+        app.update();
+        let light = PlanetLight {
+            origin: Vec2::new(0.9, 0.1),
+        };
+        app.world_mut().entity_mut(planet).insert(light);
+        app.update();
+        assert_eq!(uniform(&app, &material).light_origin, light.origin);
+    }
+
+    #[test]
+    fn a_spinning_planet_advances_by_its_speed_and_wraps_a_revolution() {
+        let mut app = App::new();
+        app.add_plugins(ViewTestPlugin);
+        let speed = 2.0;
+        let (_, material) = spawn_planet(&mut app, &spec(speed));
+        let mut previous: Option<f32> = None;
+        for _ in 0..40 {
+            app.update();
+            let time = uniform(&app, &material).time;
+            assert!((0.0..std::f32::consts::TAU).contains(&time), "{time}");
+            if let Some(previous) = previous {
+                let step = (time - previous).rem_euclid(std::f32::consts::TAU);
+                let dt = app.world().resource::<Time>().delta_secs();
+                assert!((step - speed * dt).abs() < 1e-4, "{step}");
+            }
+            previous = Some(time);
         }
     }
 }
