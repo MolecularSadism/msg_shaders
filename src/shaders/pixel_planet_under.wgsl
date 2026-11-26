@@ -1,11 +1,12 @@
 // Terran base / ocean layer (Deep-Fold/PixelPlanets `PlanetUnder`, MIT).
 
 #import bevy_sprite::mesh2d_vertex_output::VertexOutput
-#import msg_shaders::pixel_planet_functions::{fbm_v, spherify, rotate_uv, dither_bool, dither_coverage}
+#import msg_shaders::pixel_planet_functions::{fbm_v, sphere_lonlat, lonlat_noise, rotate_uv, dither_bool, dither_coverage}
 
 struct U {
     colors: array<vec4<f32>, 3>,
     light_origin: vec2<f32>,
+    tilt_cs: vec2<f32>,
     pixels: f32,
     rotation: f32,
     size: f32,
@@ -25,7 +26,7 @@ struct U {
 fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     let tile = vec2<f32>(2.0, 1.0);
 
-    var uv = floor(mesh.uv * u.pixels) / u.pixels;
+    let uv = floor(mesh.uv * u.pixels) / u.pixels;
 
     let dith = dither_bool(uv, mesh.uv, u.pixels);
     var d_light = distance(uv, u.light_origin);
@@ -36,10 +37,9 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     let coverage = clamp((0.49999 - d_circle) / max(edge_w, 1e-6), 0.0, 1.0);
     let a = dither_coverage(coverage, cell);
 
-    uv = spherify(uv);
-    uv = rotate_uv(uv, u.rotation);
+    let ll = sphere_lonlat(rotate_uv(uv, u.rotation), u.tilt_cs);
 
-    d_light += fbm_v(uv * u.size + vec2<f32>(u.time, 0.0), u.octaves, u.size, u.seed, tile) * 0.3;
+    d_light += fbm_v(lonlat_noise(ll, u.time, u.size, tile), u.octaves, u.size, u.seed, tile) * 0.3;
 
     let dither_border = (1.0 / u.pixels) * u.dither_size;
 

@@ -1,8 +1,9 @@
 // Planetary ring (Deep-Fold/PixelPlanets `GasPlanetLayers/Ring`, MIT).
 //
 // Drawn on a quad larger than the planet body; the body occupies a fraction
-// `1.0 / scale_rel_to_planet` of this quad, and the ring's back half is masked
-// where it would pass behind that disc.
+// `1.0 / scale_rel_to_planet` of this quad. The ring lies in the equatorial
+// plane, so the body's tilt squashes it and decides which half passes behind
+// the disc.
 
 #import bevy_sprite::mesh2d_vertex_output::VertexOutput
 #import msg_shaders::pixel_planet_functions::{fbm_v, rotate_uv, dither_coverage}
@@ -11,13 +12,13 @@ struct U {
     colors: array<vec4<f32>, 3>,
     dark_colors: array<vec4<f32>, 3>,
     light_origin: vec2<f32>,
+    tilt_cs: vec2<f32>,
     pixels: f32,
     rotation: f32,
     size: f32,
     seed: f32,
     time: f32,
     ring_width: f32,
-    ring_perspective: f32,
     scale_rel_to_planet: f32,
     edge_dither: f32,
     octaves: i32,
@@ -31,6 +32,9 @@ struct U {
 // crossing of `ring` past its alpha threshold.
 const EDGE_DITHER_RING_SCALE: f32 = 0.04;
 
+// Width of the visible band in units of `ring_width`.
+const EDGE_ON_BAND: f32 = 1.5;
+
 @fragment
 fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     let tile = vec2<f32>(2.0, 1.0);
@@ -41,24 +45,27 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     let light_d = distance(uv, u.light_origin);
     uv = rotate_uv(uv, u.rotation);
 
-    // center is used to determine ring position
+    // Ring-plane coordinates: the screen y squashed by sin(tilt), signed so the
+    // plane keeps its handedness. Edge-on it stays open just enough for the
+    // band to cross a texel row in front of the disc, so it reads as a line.
+    let s = u.tilt_cs.y;
+    let min_squash = 1.0 / (u.pixels * u.ring_width * EDGE_ON_BAND);
+    let squash = select(-1.0, 1.0, s >= 0.0) * max(abs(s), min_squash);
     var uv_center = uv - vec2<f32>(0.0, 0.5);
-
-    // tilt ring
-    uv_center *= vec2<f32>(1.0, u.ring_perspective);
+    uv_center.y /= squash;
     let center_d = distance(uv_center, vec2<f32>(0.5, 0.0));
 
     // cut out 2 circles of different sizes and keep only their intersection
     var ring = smoothstep(0.5 - u.ring_width * 2.0, 0.5 - u.ring_width, center_d);
     ring *= smoothstep(center_d - u.ring_width, center_d, 0.4);
 
-    // pretend the ring goes behind the planet by removing it in the upper half
-    if (uv.y < 0.5) {
+    // The far half passes behind the disc: the side of -sign(sin tilt cos tilt).
+    if ((uv.y - 0.5) * squash * u.tilt_cs.x < 0.0) {
         ring *= step(1.0 / u.scale_rel_to_planet, distance(uv, vec2<f32>(0.5)));
     }
 
-    // rotate material in the ring
-    uv_center = rotate_uv(uv_center + vec2<f32>(0.0, 0.5), u.time);
+    // Turn the material in the ring plane with the body's spin.
+    uv_center = rotate_uv(uv_center + vec2<f32>(0.0, 0.5), -u.time);
     ring *= fbm_v(uv_center * u.size, u.octaves, u.size, u.seed, tile);
 
     // apply colors based on final value

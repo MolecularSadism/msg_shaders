@@ -2,10 +2,13 @@
 
 // Shared noise / shaping helpers used by every pixel-planet layer.
 //
-// Ported from Deep-Fold/PixelPlanets (MIT), except `circle_noise`, which is an
-// original implementation. The `tile` argument reproduces the per-shader
-// wrapping factor (`mod(coord, tile * round(size))`) that makes the planet
-// surface seamless across the sphere mapping.
+// Ported from Deep-Fold/PixelPlanets (MIT), except `circle_noise` and the
+// sphere mapping (`sphere_lonlat`, `lonlat_noise`, `pole_coverage`), which are
+// original. The `tile` argument reproduces the per-shader wrapping factor
+// (`mod(coord, tile * noise_period(size))`); `lonlat_noise` spans exactly
+// `tile.x` of those periods per revolution, so longitude wraps seamlessly.
+
+const TAU: f32 = 6.283185307179586;
 
 fn gmod1(a: f32, b: f32) -> f32 {
     return a - b * floor(a / b);
@@ -15,8 +18,13 @@ fn gmod2(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
     return a - b * floor(a / b);
 }
 
+// Noise cells per tile unit: `size` rounded, and at least one.
+fn noise_period(size: f32) -> f32 {
+    return max(round(size), 1.0);
+}
+
 fn rand_v(coord: vec2<f32>, size: f32, seed: f32, tile: vec2<f32>) -> f32 {
-    let c = gmod2(coord, tile * round(size));
+    let c = gmod2(coord, tile * noise_period(size));
     return fract(sin(dot(c, vec2<f32>(12.9898, 78.233))) * 15.5453 * seed);
 }
 
@@ -60,7 +68,7 @@ fn circle_noise(uv_in: vec2<f32>, size: f32, seed: f32, tile: vec2<f32>) -> f32 
 
     // Independent draws for the disc's placement and its radius. The integer
     // offsets decorrelate the draws while staying compatible with the
-    // `tile * round(size)` wrap inside `rand_v`.
+    // `tile * noise_period(size)` wrap inside `rand_v`.
     let jitter_x = rand_v(cell, size, seed, tile);
     let jitter_y = rand_v(cell + vec2<f32>(41.0, 289.0), size, seed, tile);
     let radius_draw = rand_v(cell + vec2<f32>(97.0, 113.0), size, seed, tile);
@@ -75,11 +83,28 @@ fn circle_noise(uv_in: vec2<f32>, size: f32, seed: f32, tile: vec2<f32>) -> f32 
     return smoothstep(0.0, radius, dist);
 }
 
-fn spherify(uv: vec2<f32>) -> vec2<f32> {
-    let centered = uv * 2.0 - 1.0;
-    let z = sqrt(max(1.0 - dot(centered, centered), 0.0));
-    let sphere = centered / (z + 1.0);
-    return sphere * 0.5 + 0.5;
+// Disc point → (longitude, sine latitude) on a sphere whose pole leans toward
+// the viewer by the tilt whose cosine and sine are `tilt_cs`. Longitude is in
+// [-π, π], sine latitude in [-1, 1].
+fn sphere_lonlat(uv: vec2<f32>, tilt_cs: vec2<f32>) -> vec2<f32> {
+    let p = uv * 2.0 - 1.0;
+    let z = sqrt(max(1.0 - dot(p, p), 0.0));
+    let y = p.y * tilt_cs.x - z * tilt_cs.y;
+    let zt = p.y * tilt_cs.y + z * tilt_cs.x;
+    return vec2<f32>(atan2(p.x, zt), y);
+}
+
+// (longitude, sine latitude) → noise coordinates. `spin` (radians) turns the
+// surface about the pole; one revolution spans exactly `tile.x` noise periods.
+fn lonlat_noise(ll: vec2<f32>, spin: f32, size: f32, tile: vec2<f32>) -> vec2<f32> {
+    let x = (ll.x + spin) / TAU * tile.x * noise_period(size);
+    return vec2<f32>(x, (ll.y * 0.5 + 0.5) * size);
+}
+
+// Soft coverage of the polar caps past sine latitude `cap`: 0 outside, rising
+// to 1 over `width`. A `cap` above 1 covers nothing.
+fn pole_coverage(sin_lat: f32, cap: f32, width: f32) -> f32 {
+    return clamp((abs(sin_lat) - cap) / max(width, 1e-6), 0.0, 1.0);
 }
 
 fn rotate_uv(coord_in: vec2<f32>, angle: f32) -> vec2<f32> {

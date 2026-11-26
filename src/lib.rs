@@ -94,8 +94,8 @@ pub use nebula::{
 #[cfg(feature = "render_2d")]
 pub use pixel_planet::{
     PIXEL_PLANET_FUNCTIONS_SHADER_HANDLE, PIXEL_PLANET_FUNCTIONS_WGSL, PixelPlanet,
-    PixelPlanetPlugin, PixelPlanetShaderLibraryPlugin, PlanetPalette, PlanetSpec,
-    PlanetSpinSystems, PlanetType,
+    PixelPlanetPlugin, PixelPlanetShaderLibraryPlugin, PlanetLight, PlanetOrientation,
+    PlanetPalette, PlanetSpec, PlanetSpinSystems, PlanetType,
 };
 
 pub mod prelude {
@@ -112,8 +112,8 @@ pub mod prelude {
     pub use super::{
         DeflectionShape, DeflectionSource, LENSING_FIELD_RES, LensingFieldPlugin,
         LensingFieldSettings, LightDeflectionRequest, LightDeflector, MAX_DEFLECTION_SOURCES,
-        PixelPlanet, PixelPlanetPlugin, PlanetPalette, PlanetSpec, PlanetSpinSystems, PlanetType,
-        RING_EDGE_FADE,
+        PixelPlanet, PixelPlanetPlugin, PlanetLight, PlanetOrientation, PlanetPalette, PlanetSpec,
+        PlanetSpinSystems, PlanetType, RING_EDGE_FADE,
     };
 }
 

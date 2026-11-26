@@ -19,8 +19,12 @@ pub struct CommonParams {
     pub light_origin: Vec2,
     /// Pixelation resolution (cells across the planet).
     pub pixels: f32,
-    /// Surface tilt in radians, applied inside the shader.
+    /// Roll about the view axis in radians, applied inside the shader.
     pub rotation: f32,
+    /// Pole tilt toward the viewer in radians; `0` keeps the pole in the screen plane.
+    pub tilt: f32,
+    /// Sine latitude past which the polar caps cover the surface; `None` leaves the poles bare.
+    pub pole_cap: Option<f32>,
     /// Noise frequency.
     pub size: f32,
     /// Noise seed (`1.0..=10.0`).
@@ -34,15 +38,43 @@ pub struct CommonParams {
     pub dither: Option<f32>,
 }
 
-/// A pixel-planet layer material whose surface animates over time.
+impl CommonParams {
+    /// `pole_cap` as the shader reads it: a sine latitude above `1` covers nothing.
+    fn pole_cap_uniform(&self) -> f32 {
+        self.pole_cap.map_or(NO_POLE_CAP, |cap| cap.clamp(0.0, 1.0))
+    }
+}
+
+/// Sine latitude no surface point reaches, so the shader draws no polar cap.
+const NO_POLE_CAP: f32 = 2.0;
+
+/// The view a planet layer is drawn with: everything that changes after spawn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LayerView {
+    /// Spin about the pole, in radians.
+    pub spin: f32,
+    /// Pole tilt toward the viewer, in radians.
+    pub tilt: f32,
+    /// Highlight location in `[0, 1]` UV space.
+    pub light_origin: Vec2,
+}
+
+impl LayerView {
+    /// The tilt as the shader reads it: `(cos, sin)`.
+    #[must_use]
+    pub fn tilt_cs(&self) -> Vec2 {
+        Vec2::from_angle(self.tilt)
+    }
+}
+
+/// A pixel-planet layer material whose view changes after spawn.
 ///
-/// The `time` uniform offsets the noise sampling (and the ring rotation) inside
-/// the shader, so advancing it each frame scrolls the surface as if the planet
-/// were spinning. Every layer material exposes it through this trait so a single
-/// generic system can drive the rotation for all of them.
+/// The `time` uniform is the spin about the pole in radians, `tilt_cs` the pole tilt, and
+/// `light_origin` the highlight. Every layer material exposes them through this trait so a single
+/// generic system can drive all of them.
 pub trait PlanetMaterial {
-    /// Mutable access to the shader `time` uniform driving the rotation.
-    fn time_mut(&mut self) -> &mut f32;
+    /// Writes `view` into the layer's uniforms.
+    fn set_view(&mut self, view: LayerView);
 }
 
 macro_rules! impl_material2d {
@@ -56,8 +88,10 @@ macro_rules! impl_material2d {
             }
         }
         impl PlanetMaterial for $mat {
-            fn time_mut(&mut self) -> &mut f32 {
-                &mut self.u.time
+            fn set_view(&mut self, view: LayerView) {
+                self.u.time = view.spin;
+                self.u.tilt_cs = view.tilt_cs();
+                self.u.light_origin = view.light_origin;
             }
         }
     };
@@ -71,6 +105,7 @@ macro_rules! impl_material2d {
 pub struct NoAtmosphereUniform {
     pub colors: [Vec4; 3],
     pub light_origin: Vec2,
+    pub tilt_cs: Vec2,
     pub pixels: f32,
     pub rotation: f32,
     pub size: f32,
@@ -80,6 +115,7 @@ pub struct NoAtmosphereUniform {
     pub light_border_2: f32,
     pub dither_size: f32,
     pub edge_dither: f32,
+    pub pole_cap: f32,
     pub octaves: i32,
     pub should_dither: u32,
 }
@@ -96,6 +132,7 @@ impl NoAtmosphereMaterial {
             u: NoAtmosphereUniform {
                 colors: palette.colors3(),
                 light_origin: p.light_origin,
+                tilt_cs: Vec2::from_angle(p.tilt),
                 pixels: p.pixels,
                 rotation: p.rotation,
                 size: p.size,
@@ -105,6 +142,7 @@ impl NoAtmosphereMaterial {
                 light_border_2: 0.6,
                 dither_size: 2.0,
                 edge_dither: p.dither.unwrap_or(0.0),
+                pole_cap: p.pole_cap_uniform(),
                 octaves: p.octaves,
                 should_dither: u32::from(p.dither.is_some()),
             },
@@ -121,6 +159,7 @@ impl_material2d!(NoAtmosphereMaterial, super::NO_ATMOSPHERE_SHADER);
 pub struct PlanetUnderUniform {
     pub colors: [Vec4; 3],
     pub light_origin: Vec2,
+    pub tilt_cs: Vec2,
     pub pixels: f32,
     pub rotation: f32,
     pub size: f32,
@@ -146,6 +185,7 @@ impl PlanetUnderMaterial {
             u: PlanetUnderUniform {
                 colors: palette.colors3(),
                 light_origin: p.light_origin,
+                tilt_cs: Vec2::from_angle(p.tilt),
                 pixels: p.pixels,
                 rotation: p.rotation,
                 size: p.size,
@@ -171,6 +211,7 @@ impl_material2d!(PlanetUnderMaterial, super::PLANET_UNDER_SHADER);
 pub struct PlanetLandmassUniform {
     pub colors: [Vec4; 4],
     pub light_origin: Vec2,
+    pub tilt_cs: Vec2,
     pub pixels: f32,
     pub rotation: f32,
     pub size: f32,
@@ -180,6 +221,7 @@ pub struct PlanetLandmassUniform {
     pub light_border_2: f32,
     pub land_cutoff: f32,
     pub edge_dither: f32,
+    pub pole_cap: f32,
     pub octaves: i32,
 }
 
@@ -195,6 +237,7 @@ impl PlanetLandmassMaterial {
             u: PlanetLandmassUniform {
                 colors: palette.colors4(),
                 light_origin: p.light_origin,
+                tilt_cs: Vec2::from_angle(p.tilt),
                 pixels: p.pixels,
                 rotation: p.rotation,
                 size: p.size,
@@ -204,6 +247,7 @@ impl PlanetLandmassMaterial {
                 light_border_2: 0.5,
                 land_cutoff: 0.5,
                 edge_dither: p.dither.unwrap_or(0.0),
+                pole_cap: p.pole_cap_uniform(),
                 octaves: p.octaves,
             },
         }
@@ -219,6 +263,7 @@ impl_material2d!(PlanetLandmassMaterial, super::PLANET_LANDMASS_SHADER);
 pub struct CloudsUniform {
     pub colors: [Vec4; 4],
     pub light_origin: Vec2,
+    pub tilt_cs: Vec2,
     pub pixels: f32,
     pub rotation: f32,
     pub size: f32,
@@ -228,8 +273,8 @@ pub struct CloudsUniform {
     pub light_border_2: f32,
     pub cloud_cover: f32,
     pub stretch: f32,
-    pub cloud_curve: f32,
     pub edge_dither: f32,
+    pub pole_cap: f32,
     pub octaves: i32,
 }
 
@@ -245,6 +290,7 @@ impl CloudsMaterial {
             u: CloudsUniform {
                 colors: palette.cloud4(),
                 light_origin: p.light_origin,
+                tilt_cs: Vec2::from_angle(p.tilt),
                 pixels: p.pixels,
                 rotation: p.rotation,
                 size: p.size,
@@ -254,8 +300,8 @@ impl CloudsMaterial {
                 light_border_2: 0.62,
                 cloud_cover,
                 stretch: 2.0,
-                cloud_curve: 1.3,
                 edge_dither: p.dither.unwrap_or(0.0),
+                pole_cap: p.pole_cap_uniform(),
                 octaves: p.octaves,
             },
         }
@@ -272,6 +318,7 @@ pub struct GasLayersUniform {
     pub colors: [Vec4; 3],
     pub dark_colors: [Vec4; 3],
     pub light_origin: Vec2,
+    pub tilt_cs: Vec2,
     pub pixels: f32,
     pub rotation: f32,
     pub size: f32,
@@ -281,6 +328,7 @@ pub struct GasLayersUniform {
     pub light_border_2: f32,
     pub bands: f32,
     pub edge_dither: f32,
+    pub pole_cap: f32,
     pub octaves: i32,
     pub n_colors: i32,
     pub should_dither: u32,
@@ -299,6 +347,7 @@ impl GasLayersMaterial {
                 colors: palette.colors3(),
                 dark_colors: palette.dark3(),
                 light_origin: p.light_origin,
+                tilt_cs: Vec2::from_angle(p.tilt),
                 pixels: p.pixels,
                 rotation: p.rotation,
                 size: p.size,
@@ -308,6 +357,7 @@ impl GasLayersMaterial {
                 light_border_2: 0.62,
                 bands,
                 edge_dither: p.dither.unwrap_or(0.0),
+                pole_cap: p.pole_cap_uniform(),
                 octaves: p.octaves,
                 n_colors: 3,
                 should_dither: u32::from(p.dither.is_some()),
@@ -326,13 +376,13 @@ pub struct RingUniform {
     pub colors: [Vec4; 3],
     pub dark_colors: [Vec4; 3],
     pub light_origin: Vec2,
+    pub tilt_cs: Vec2,
     pub pixels: f32,
     pub rotation: f32,
     pub size: f32,
     pub seed: f32,
     pub time: f32,
     pub ring_width: f32,
-    pub ring_perspective: f32,
     pub scale_rel_to_planet: f32,
     pub edge_dither: f32,
     pub octaves: i32,
@@ -352,13 +402,13 @@ impl RingMaterial {
                 colors: palette.colors3(),
                 dark_colors: palette.dark3(),
                 light_origin: p.light_origin,
+                tilt_cs: Vec2::from_angle(p.tilt),
                 pixels: p.pixels,
                 rotation: p.rotation,
                 size: p.size,
                 seed: p.seed,
                 time: 0.0,
                 ring_width: 0.1,
-                ring_perspective: 4.0,
                 scale_rel_to_planet,
                 edge_dither: p.dither.unwrap_or(0.0),
                 octaves: p.octaves,
@@ -368,3 +418,337 @@ impl RingMaterial {
     }
 }
 impl_material2d!(RingMaterial, super::RING_SHADER);
+
+#[cfg(test)]
+mod tests {
+    use bevy::render::render_resource::encase::UniformBuffer;
+
+    use super::*;
+
+    /// Gives each uniform field a value no other field holds, so a swap shows.
+    trait Distinct {
+        fn distinct(next: &mut f32) -> Self;
+        fn bytes(&self) -> Vec<u8>;
+    }
+
+    impl Distinct for f32 {
+        fn distinct(next: &mut f32) -> Self {
+            *next += 1.0;
+            *next
+        }
+        fn bytes(&self) -> Vec<u8> {
+            self.to_le_bytes().to_vec()
+        }
+    }
+
+    impl Distinct for i32 {
+        fn distinct(next: &mut f32) -> Self {
+            f32::distinct(next) as i32
+        }
+        fn bytes(&self) -> Vec<u8> {
+            self.to_le_bytes().to_vec()
+        }
+    }
+
+    impl Distinct for u32 {
+        fn distinct(next: &mut f32) -> Self {
+            f32::distinct(next) as u32
+        }
+        fn bytes(&self) -> Vec<u8> {
+            self.to_le_bytes().to_vec()
+        }
+    }
+
+    impl Distinct for Vec2 {
+        fn distinct(next: &mut f32) -> Self {
+            Vec2::new(f32::distinct(next), f32::distinct(next))
+        }
+        fn bytes(&self) -> Vec<u8> {
+            self.to_array().iter().flat_map(|v| v.bytes()).collect()
+        }
+    }
+
+    impl<const N: usize> Distinct for [Vec4; N] {
+        fn distinct(next: &mut f32) -> Self {
+            std::array::from_fn(|_| {
+                Vec4::new(
+                    f32::distinct(next),
+                    f32::distinct(next),
+                    f32::distinct(next),
+                    f32::distinct(next),
+                )
+            })
+        }
+        fn bytes(&self) -> Vec<u8> {
+            self.iter()
+                .flat_map(|v| v.to_array())
+                .flat_map(|v| v.to_le_bytes())
+                .collect()
+        }
+    }
+
+    /// The members of the shader's `struct U`, by name and byte offset, and its size.
+    fn shader_layout(shader: &str) -> (Vec<(String, usize)>, usize) {
+        let mut src = String::from(
+            "struct VertexOutput { @builtin(position) clip_position: vec4<f32>, \
+             @location(0) world_position: vec4<f32>, @location(1) uv: vec2<f32> };\n",
+        );
+        for source in [
+            include_str!("../shaders/pixel_planet_functions.wgsl"),
+            shader,
+        ] {
+            for line in source.lines() {
+                if !line.trim_start().starts_with('#') {
+                    src.push_str(line);
+                    src.push('\n');
+                }
+            }
+        }
+        let module = naga::front::wgsl::parse_str(&src)
+            .unwrap_or_else(|e| panic!("WGSL parse error\n{}", e.emit_to_string(&src)));
+        let (_, ty) = module
+            .types
+            .iter()
+            .find(|(_, ty)| ty.name.as_deref() == Some("U"))
+            .expect("the shader declares `struct U`");
+        let naga::TypeInner::Struct { members, span } = &ty.inner else {
+            panic!("`U` is a struct");
+        };
+        let members = members
+            .iter()
+            .map(|member| {
+                (
+                    member.name.clone().expect("named member"),
+                    member.offset as usize,
+                )
+            })
+            .collect();
+        (members, *span as usize)
+    }
+
+    /// Fills every field of `$uniform` with a distinct value, encodes it as the GPU sees it and
+    /// checks each field lands at the offset the shader's `struct U` declares, in the same order.
+    macro_rules! assert_layout {
+        ($shader:literal, $uniform:expr, [$($field:ident),* $(,)?]) => {{
+            let mut uniform = $uniform;
+            let mut next = 0.0;
+            $(uniform.$field = Distinct::distinct(&mut next);)*
+            let mut buffer = UniformBuffer::new(Vec::<u8>::new());
+            buffer.write(&uniform).expect("the uniform encodes");
+            let bytes = buffer.into_inner();
+
+            let (members, size) = shader_layout(include_str!($shader));
+            let names: Vec<&str> = members.iter().map(|(name, _)| name.as_str()).collect();
+            assert_eq!(names, [$(stringify!($field)),*], "{} member order", $shader);
+            assert!(bytes.len() >= size, "{}: {} bytes for a {size}-byte struct", $shader, bytes.len());
+            $(
+                let (_, offset) = members
+                    .iter()
+                    .find(|(name, _)| name == stringify!($field))
+                    .expect("member");
+                let expected = Distinct::bytes(&uniform.$field);
+                assert_eq!(
+                    &bytes[*offset..*offset + expected.len()],
+                    expected.as_slice(),
+                    "{}: `{}` at offset {offset}",
+                    $shader,
+                    stringify!($field),
+                );
+            )*
+        }};
+    }
+
+    fn params() -> CommonParams {
+        CommonParams {
+            light_origin: Vec2::splat(0.3),
+            pixels: 64.0,
+            rotation: 0.0,
+            tilt: 0.4,
+            pole_cap: Some(0.8),
+            size: 6.0,
+            seed: 2.0,
+            octaves: 3,
+            dither: Some(1.0),
+        }
+    }
+
+    fn palette() -> PlanetPalette {
+        PlanetPalette::new([Color::WHITE, Color::BLACK])
+    }
+
+    #[test]
+    fn no_atmosphere_uniform_matches_its_shader() {
+        assert_layout!(
+            "../shaders/pixel_planet_no_atmosphere.wgsl",
+            NoAtmosphereMaterial::new(params(), &palette()).u,
+            [
+                colors,
+                light_origin,
+                tilt_cs,
+                pixels,
+                rotation,
+                size,
+                seed,
+                time,
+                light_border_1,
+                light_border_2,
+                dither_size,
+                edge_dither,
+                pole_cap,
+                octaves,
+                should_dither,
+            ]
+        );
+    }
+
+    #[test]
+    fn under_uniform_matches_its_shader() {
+        assert_layout!(
+            "../shaders/pixel_planet_under.wgsl",
+            PlanetUnderMaterial::new(params(), &palette()).u,
+            [
+                colors,
+                light_origin,
+                tilt_cs,
+                pixels,
+                rotation,
+                size,
+                seed,
+                time,
+                light_border_1,
+                light_border_2,
+                dither_size,
+                edge_dither,
+                octaves,
+                should_dither,
+            ]
+        );
+    }
+
+    #[test]
+    fn landmass_uniform_matches_its_shader() {
+        assert_layout!(
+            "../shaders/pixel_planet_landmass.wgsl",
+            PlanetLandmassMaterial::new(params(), &palette()).u,
+            [
+                colors,
+                light_origin,
+                tilt_cs,
+                pixels,
+                rotation,
+                size,
+                seed,
+                time,
+                light_border_1,
+                light_border_2,
+                land_cutoff,
+                edge_dither,
+                pole_cap,
+                octaves,
+            ]
+        );
+    }
+
+    #[test]
+    fn clouds_uniform_matches_its_shader() {
+        assert_layout!(
+            "../shaders/pixel_planet_clouds.wgsl",
+            CloudsMaterial::new(params(), &palette(), 0.5).u,
+            [
+                colors,
+                light_origin,
+                tilt_cs,
+                pixels,
+                rotation,
+                size,
+                seed,
+                time,
+                light_border_1,
+                light_border_2,
+                cloud_cover,
+                stretch,
+                edge_dither,
+                pole_cap,
+                octaves,
+            ]
+        );
+    }
+
+    #[test]
+    fn gas_layers_uniform_matches_its_shader() {
+        assert_layout!(
+            "../shaders/pixel_planet_gas_layers.wgsl",
+            GasLayersMaterial::new(params(), &palette(), 1.0).u,
+            [
+                colors,
+                dark_colors,
+                light_origin,
+                tilt_cs,
+                pixels,
+                rotation,
+                size,
+                seed,
+                time,
+                light_border_1,
+                light_border_2,
+                bands,
+                edge_dither,
+                pole_cap,
+                octaves,
+                n_colors,
+                should_dither,
+            ]
+        );
+    }
+
+    #[test]
+    fn ring_uniform_matches_its_shader() {
+        assert_layout!(
+            "../shaders/pixel_planet_ring.wgsl",
+            RingMaterial::new(params(), &palette(), 4.0).u,
+            [
+                colors,
+                dark_colors,
+                light_origin,
+                tilt_cs,
+                pixels,
+                rotation,
+                size,
+                seed,
+                time,
+                ring_width,
+                scale_rel_to_planet,
+                edge_dither,
+                octaves,
+                n_colors,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_view_reaches_every_view_uniform() {
+        let view = LayerView {
+            spin: 1.25,
+            tilt: 0.5,
+            light_origin: Vec2::new(0.2, 0.7),
+        };
+        let mut material = GasLayersMaterial::new(params(), &palette(), 1.0);
+        material.set_view(view);
+        assert_eq!(material.u.time, view.spin);
+        assert_eq!(material.u.tilt_cs, Vec2::new(0.5_f32.cos(), 0.5_f32.sin()));
+        assert_eq!(material.u.light_origin, view.light_origin);
+    }
+
+    #[test]
+    fn a_missing_pole_cap_lies_past_every_latitude() {
+        let bare = CommonParams {
+            pole_cap: None,
+            ..params()
+        };
+        assert!(NoAtmosphereMaterial::new(bare, &palette()).u.pole_cap > 1.0);
+        assert_eq!(
+            NoAtmosphereMaterial::new(params(), &palette()).u.pole_cap,
+            0.8
+        );
+    }
+}
